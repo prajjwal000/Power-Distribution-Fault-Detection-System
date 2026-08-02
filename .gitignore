@@ -1,0 +1,5 @@
+data/
+*.csv
+.env
+pgdata/
+assignment_details/

@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./generator", "--seed-db", "--export-csv", "--pole-count", "3000"]
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # api:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: ["./api"]
+  #   ports:
+  #     - "8080:8080"
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     seed:
+  #       condition: service_completed_successfully
+
+  # simulator:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   command: ["./simulator"]
+  #   ports:
+  #     - "8081:8081"
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     seed:
+  #       condition: service_completed_successfully
+
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: ../Dockerfile.frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - api
+  #     - simulator
+
+volumes:
+  pgdata:
