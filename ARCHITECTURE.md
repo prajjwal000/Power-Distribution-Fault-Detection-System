@@ -4,18 +4,18 @@
 
 ```mermaid
 flowchart LR
-    PoleDevice["Pole device\n(energized/dark)"]
-    Ingest["API /ingest\ndedup, reorder, skew-correct"]
-    Detect["Detection engine\nlocalization + grouping"]
-    TicketDB[("Tickets\nPostgreSQL")]
-    OperatorUI["Operator console\n/pdashboard, /map"]
+    PoleDevice["Pole device<br/>(energized/dark)"]
+    Ingest["API /ingest<br/>dedup, reorder, skew-correct"]
+    Detect["Detection engine<br/>localization + grouping"]
+    TicketDB[("Tickets<br/>PostgreSQL")]
+    OperatorUI["Operator console<br/>/pdashboard, /map"]
 
     PoleDevice -->|telemetry POST| Ingest
     Ingest --> Detect
     Detect --> TicketDB
     TicketDB --> OperatorUI
 
-    Simulator["Simulator\n(ground truth)"] -.->|same telemetry| Ingest
+    Simulator["Simulator<br/>(ground truth)"] -.->|same telemetry| Ingest
 ```
 
 ## Data sourcing and ingestion
