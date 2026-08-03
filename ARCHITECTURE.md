@@ -78,6 +78,42 @@ The **registry** is the API's source of truth for topology. Where `parent_pole_i
 
 **Decision expected to be wrong**: map and list as separate pages may not satisfy the rubric's "map and list working together"; the fallback is a split-pane dashboard.
 
+## Frontend architecture
+
+### Fault Injector
+
+The fault injector shows the full ground-truth network as an interactive node-link diagram on an HTML canvas.
+
+**Tree layout**: `d3.tree()` with `nodeSize([DY, DX])` — horizontal tidy tree. `node.y = depth` → canvas x (left-to-right); `node.x = sibling-order` → canvas y (top-to-bottom). The virtual root (`__root__`) and its edge to the substation are filtered from rendering.
+
+**Collapse/expand**: `d3.tree()` only positions nodes reachable via `node.children`. On collapse, children are stashed in `node._children` and `node.children` is set to undefined — the layout reflows, siblings reclaim the space. On expand, `_children` is restored. This is the standard `_children` stash pattern.
+
+**Rendering**: HTML Canvas (not SVG). Canvas is `devicePixelRatio`-aware. Rendering is fully imperative — a `doRender()` function reads from refs for always-fresh data. `FaultInjectorProvider` (React context) owns state; the canvas does not.
+
+**State persistence**:
+- `collapsedIds` and `transform` (zoom/pan): sessionStorage, restored on mount — operator's view is stable across tab switches
+- `selection`: component-local, resets on tab switch — not persisted
+
+**Context shape** (`FaultInjectorContext`): `{ nodes, links, collapsedIds, selection, transform, toggleCollapse, expandAll, collapseAll, select, updateTransform }`. The context is designed so future server event handlers can call `updateNodes()` or `updateNode()` without restructuring the tree layout or canvas component.
+
+**Node rendering**:
+- Substation/Feeder/DT: labeled rectangles with type badge and downstream count badge
+- Pole (has device): filled circle
+- Pole (no device): hollow dashed circle
+- No distinct marker for branch points — multiple outgoing edges convey the branching visually
+
+**Edge rendering**:
+- Solid line: edge is known in registry (child has `parent_pole_id`)
+- Dashed line: edge is unknown in registry (the ~60% DT topology gap — visually obvious on DTs with `has_topology: false`)
+
+**Interactions**:
+- Mouse wheel: zoom (centered on cursor)
+- Click-drag on empty canvas: pan
+- Click on node: select
+- Click on edge: select (14px hit detection threshold)
+- Click on expand/collapse indicator: toggle subtree visibility
+- Click on empty canvas: deselect
+
 ## AI feature
 
 *Not yet determined.* One paragraph to be added when the feature is chosen. Required: what it does, why that spot specifically, cost per call, and what happens when the model is unavailable.
