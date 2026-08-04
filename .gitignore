@@ -3,3 +3,6 @@
 .env
 pgdata/
 assignment_details/
+/api
+/simulator
+/generator

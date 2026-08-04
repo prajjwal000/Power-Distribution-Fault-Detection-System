@@ -24,41 +24,50 @@ services:
       postgres:
         condition: service_healthy
 
-  # api:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   command: ["./api"]
-  #   ports:
-  #     - "8080:8080"
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     seed:
-  #       condition: service_completed_successfully
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./api"]
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - API_PORT=8080
+      - SIMULATOR_URL=http://simulator:8081
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz | grep -q '\"status\":\"ok\"' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
-  # simulator:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   command: ["./simulator"]
-  #   ports:
-  #     - "8081:8081"
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     seed:
-  #       condition: service_completed_successfully
-
-  # frontend:
-  #   build:
-  #     context: ./frontend
-  #     dockerfile: ../Dockerfile.frontend
-  #   ports:
-  #     - "3000:3000"
-  #   depends_on:
-  #     - api
-  #     - simulator
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./simulator"]
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    environment:
+      - SIM_PORT=8081
+      - API_URL=http://api:8080
+      - CLOCK_MULTIPLIER=30
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/healthz | grep -q '\"status\":\"ok\"' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
 volumes:
   pgdata:
