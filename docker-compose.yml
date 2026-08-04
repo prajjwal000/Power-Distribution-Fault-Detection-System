@@ -2,7 +2,10 @@ services:
   postgres:
     image: postgres:16-alpine
     env_file:
-      - .env
+      - path: ./.env.example
+        required: true
+      - path: ./.env
+        required: false
     ports:
       - "5432:5432"
     volumes:
@@ -19,7 +22,10 @@ services:
       dockerfile: Dockerfile
     command: ["./generator", "--seed-db", "--export-csv", "--pole-count", "3000"]
     env_file:
-      - .env
+      - path: ./.env.example
+        required: true
+      - path: ./.env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -32,7 +38,10 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      - .env
+      - path: ./.env.example
+        required: true
+      - path: ./.env
+        required: false
     environment:
       - API_PORT=8080
       - SIMULATOR_URL=http://simulator:8081
@@ -54,7 +63,10 @@ services:
     ports:
       - "8081:8081"
     env_file:
-      - .env
+      - path: ./.env.example
+        required: true
+      - path: ./.env
+        required: false
     environment:
       - SIM_PORT=8081
       - API_URL=http://api:8080
