@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -10,22 +9,55 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"power-fault-detector/internal/simulator"
 )
 
 func main() {
 	cfg := readConfig()
-	srv := &http.Server{
-		Addr:    cfg.addr(),
-		Handler: routes(cfg),
-	}
 
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, cfg.databaseURL)
+	if err != nil {
+		log.Fatalf("connect to database: %v", err)
+	}
+	defer pool.Close()
+
+	log.Println("[simulator] loading state from database...")
+	st, err := simulator.LoadFromDB(ctx, pool)
+	if err != nil {
+		log.Fatalf("load simulator state: %v", err)
+	}
+	log.Printf("[simulator] loaded: %d poles, %d devices",
+		len(st.PoleByID), len(st.Devices))
+
+	clock := simulator.NewClock(cfg.clockMultiplier)
+
+	ingest := simulator.NewIngestClient(cfg.apiURL)
+
+	te := simulator.NewTelemetryEngine(st, clock, ingest.Emit)
+	te.Start()
+
+	log.Println("[simulator] running backfill...")
+	simulator.Backfill(st, clock, ingest.Emit)
+
+	mux := http.NewServeMux()
+	svr := simulator.NewServer(st, clock, te)
+	svr.Register(mux)
+
+	srv := &http.Server{Addr: cfg.addr(), Handler: mux}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-ch
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
+		<-sigCh
+		log.Println("[simulator] shutting down...")
+		te.Stop()
+		cancel()
+		time.Sleep(500 * time.Millisecond)
 	}()
 
 	log.Printf("simulator listening on %s", cfg.addr())
@@ -38,13 +70,19 @@ func main() {
 type simConfig struct {
 	port            string
 	apiURL          string
+	databaseURL     string
 	clockMultiplier int
 }
 
 func readConfig() simConfig {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL is required")
+	}
 	return simConfig{
 		port:            env("SIM_PORT", "8081"),
 		apiURL:          env("API_URL", "http://localhost:8080"),
+		databaseURL:     dbURL,
 		clockMultiplier: intEnv("CLOCK_MULTIPLIER", 30),
 	}
 }
@@ -65,31 +103,4 @@ func intEnv(key string, fallback int) int {
 		}
 	}
 	return fallback
-}
-
-func routes(cfg simConfig) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
-	return mux
-}
-
-type healthResponse struct {
-	Service    string `json:"service"`
-	Status     string `json:"status"`
-	Detail     string `json:"detail,omitempty"`
-	Multiplier int    `json:"multiplier,omitempty"`
-	Time       string `json:"time"`
-}
-
-func handleHealthz(cfg simConfig) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		body, _ := json.Marshal(healthResponse{
-			Service:    "simulator",
-			Status:     "ok",
-			Multiplier: cfg.clockMultiplier,
-			Time:       time.Now().UTC().Format(time.RFC3339),
-		})
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
-	}
 }

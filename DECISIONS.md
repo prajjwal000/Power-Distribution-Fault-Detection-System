@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-08-05 — Simulator owns the virtual clock; the API is a clock client
+
+Time is the crux of the whole demo: scheduled-outage windows, fault timing, and "how long ago was this detected" all need one shared time base. The simulator owns it — `sim_time` advances at `multiplier ×` wall time (default 30×), and the API reads `GET /sim/clock` instead of keeping its own clock. This makes runtime multiplier changes in the UI safe: with only one clock, the two services cannot drift.
+
+## 2026-08-05 — Simulator models clock skew and radio quality per device
+
+Real events arrive out of order: two poles that lose power in the same sim instant may report minutes apart, and the downstream pole can arrive first. The simulator models this directly — each device gets a fixed clock skew (±90 s) baked into `ts` and an RSSI-derived transmission delay — and emits events through a min-heap keyed by scheduled wall-clock time. Consequence: the API's ingestion and detection code must tolerate out-of-order arrival; it cannot assume the first dark pole is the fault location.
+
 ## 2026-08-04 — Transform and collapsed state persist in sessionStorage; selection does not
 
 Collapsed node IDs and canvas zoom/pan transform are stored in sessionStorage and restored on mount. This means the operator's view (what they expanded, where they were zoomed) is stable if they switch to the dashboard and back. Selection is kept in component state — it resets when navigating away, which is the correct behavior (selection is transient interaction state, not persistent view state).

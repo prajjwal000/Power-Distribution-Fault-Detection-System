@@ -41,6 +41,22 @@ The hierarchy is a rooted tree: Substation → Feeder → Distribution Transform
 
 The **registry** is the API's source of truth for topology. Where `parent_pole_id` is NULL, the tree is unknown — the system cannot walk the pole chain.
 
+## Simulator
+
+The simulator models the pole-device fleet as independent actors, not a list of fake events.
+
+**Virtual clock.** The simulator owns time. `sim_time` advances at `multiplier ×` wall time (default 30×, runtime-adjustable via `POST /clock`). Every timestamp in the system — telemetry `ts`, fault start, scheduled-outage windows — lives in this sim-time base. The API is a clock client: it reads `GET /sim/clock` (proxied as `GET /clock`) rather than keeping its own, so a multiplier change in the UI cannot cause the two services to drift.
+
+**Per-device telemetry model.** Each device has a fixed profile:
+
+- **Firmware**: ~8% of the fleet runs 1.2.x, which never sends `power_lost` — it just goes silent.
+- **Clock skew**: fixed per-device offset in `[−90, +90] s`, baked into `ts`. Two devices that go dark in the same sim instant can report minutes apart.
+- **Radio quality**: RSSI-derived transmission delay (`max(0, |rssi|−75)·2 s`). A downstream device with good radio can reach the API before the fault pole does.
+- **Delivery**: `power_lost` succeeds ~70% of the time for fw ≥ 1.3 (capacitor reserve), 0% for fw 1.2.x.
+- **Heartbeats**: every 900 s ± 45 s, scheduled per device so steady-state traffic is spread across the window rather than bunched.
+
+Events are emitted through a min-heap keyed by each device's scheduled wall-clock time, so the simulator delivers out-of-order arrival the same way the real network would.
+
 ## Localization algorithm
 
 *Not yet implemented*
@@ -66,7 +82,8 @@ The **registry** is the API's source of truth for topology. Where `parent_pole_i
 | GET | `/network/tree` | Registry-known hierarchy (not ground truth) |
 | GET | `/sim/topology/tree` | Ground-truth hierarchy — served by simulator, not API |
 | POST | `/sim/faults` | Inject fault — simulator endpoint |
-| POST | `/sim/faults/:id/repair` | Repair fault — simulator endpoint |
+| POST | `/sim/faults/:id` | Repair one fault — simulator endpoint |
+| POST | `/sim/faults/repair` | Repair all active faults — simulator endpoint |
 | POST | `/sim/noise` | Inject noise — simulator endpoint |
 | GET | `/scheduled-outages` | Mock feed — simulator endpoint |
 
