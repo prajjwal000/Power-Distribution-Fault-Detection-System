@@ -125,7 +125,7 @@ function buildTree(data: NetworkData): TreeNode {
         const visited = new Set<string>()
 
         // Find root poles (no parent)
-        const rootPoles = poles.filter((p) => p.parent_id === null)
+        const rootPoles = poles.filter((p) => p.parent_id == null)
 
         const poleChildren: TreeNode[] = []
         for (const rp of rootPoles) {
@@ -185,10 +185,22 @@ function isEdgeKnown(
 
 // ── Compute layout ──
 
-// Horizontal spacing between depth levels
-const DX = 220
+// Horizontal spacing: wider for hierarchy levels (root→sub→feeder→dt),
+// tighter for pole-to-pole edges so the radial tree doesn't run off the canvas.
+const DX_HIERARCHY = 220
+const DX_POLE = 60
 // Vertical spacing between sibling nodes
 const DY = 32
+
+function depthX(type: TreeNode["type"], depth: number): number {
+  // d3 depth: 0=root, 1=substation, 2=feeder, 3=dt, 4=first pole, 5+=descendant poles
+  const poleDepth = 4
+  if (depth < poleDepth) {
+    return depth * DX_HIERARCHY
+  }
+  const hierarchyEnd = (poleDepth - 1) * DX_HIERARCHY
+  return hierarchyEnd + (depth - poleDepth + 1) * DX_POLE
+}
 
 export function computeLayout(data: NetworkData, collapsedIds: Set<string>): LayoutResult {
   const root = buildTree(data)
@@ -206,8 +218,8 @@ export function computeLayout(data: NetworkData, collapsedIds: Set<string>): Lay
     }
   })
 
-  // Run tree layout
-  const layout = tree<TreeNode>().nodeSize([DY, DX])
+  // Run tree layout (d3 handles sibling-order y via x in nodeSize)
+  const layout = tree<TreeNode>().nodeSize([DY, DX_HIERARCHY])
   layout(hRoot)
 
   // Collect positioned nodes
@@ -219,8 +231,8 @@ export function computeLayout(data: NetworkData, collapsedIds: Set<string>): Lay
       id: d.id,
       type: d.type,
       name: d.name,
-      x: d3node.y,           // depth → canvas x (left-to-right)
-      y: d3node.x + 300,     // sibling order → canvas y (+ offset so root starts at left)
+      x: depthX(d.type, d3node.depth), // custom depth → canvas x with tiered spacing
+      y: d3node.x + 300,               // sibling order → canvas y (+ offset so root starts at left)
       depth: d3node.depth,
       dtId: d.dtId,
       feederId: d.feederId,
@@ -242,9 +254,9 @@ export function computeLayout(data: NetworkData, collapsedIds: Set<string>): Lay
     links.push({
       sourceId: src.data.id,
       targetId: tgt.data.id,
-      x1: src.y,
+      x1: depthX(src.data.type, src.depth),
       y1: src.x + 300,
-      x2: tgt.y,
+      x2: depthX(tgt.data.type, tgt.depth),
       y2: tgt.x + 300,
       known: isEdgeKnown(tgt.data.id, registryById),
     })

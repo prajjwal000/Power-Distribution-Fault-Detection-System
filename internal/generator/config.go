@@ -49,23 +49,28 @@ func ConfigForPoleCount(targetPoles int) Config {
 		cfg.SubstationCount = 1
 		cfg.FeedersPerSub = 2
 		cfg.DTsPerFeeder = Range{Min: 3, Max: 5}
-		cfg.PolesPerDT = Range{Min: 20, Max: 80}
 	case targetPoles < 2000:
 		cfg.SubstationCount = 1
 		cfg.FeedersPerSub = 3
 		cfg.DTsPerFeeder = Range{Min: 5, Max: 7}
-		cfg.PolesPerDT = Range{Min: 30, Max: 120}
 	case targetPoles < 5000:
 		cfg.SubstationCount = 2
 		cfg.FeedersPerSub = 3
 		cfg.DTsPerFeeder = Range{Min: 6, Max: 8}
-		cfg.PolesPerDT = Range{Min: 40, Max: 150}
-	default:
-		cfg.SubstationCount = 2
-		cfg.FeedersPerSub = 4
+	case targetPoles < 15000:
+		cfg.SubstationCount = 3
+		cfg.FeedersPerSub = 6
 		cfg.DTsPerFeeder = Range{Min: 8, Max: 12}
-		cfg.PolesPerDT = Range{Min: 50, Max: 200}
+	default:
+		// Full-scale: 4 subs × ~8 feeders = 31 feeders, 412 DTs, ~38k poles
+		cfg.SubstationCount = 4
+		cfg.FeedersPerSub = 8
+		cfg.DTsPerFeeder = Range{Min: 10, Max: 16}
 	}
+
+	// PolesPerDT always uses the assignment's full range (9–240).
+	// The piecewise samplePoleCount distribution gives the right shape
+	// regardless of the range bounds.
 
 	return cfg
 }

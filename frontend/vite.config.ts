@@ -11,4 +11,16 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  server: {
+    proxy: {
+      "/sim": {
+        target: "http://localhost:8081",
+        changeOrigin: true,
+      },
+      "/clock": {
+        target: "http://localhost:8081",
+        changeOrigin: true,
+      },
+    },
+  },
 })

@@ -84,12 +84,13 @@ func (s *Server) handleTopologyTree(w http.ResponseWriter, r *http.Request) {
 	gtNodes := make([]map[string]any, 0, len(s.st.GTPoles))
 	for _, p := range s.st.GTPoles {
 		node := map[string]any{
-			"pole_id":     p.ID,
-			"dt_id":       p.DTID,
-			"seq_on_line": p.SeqOnLine,
-			"children":    s.st.Children[p.ID],
-			"lat":         p.Lat,
-			"lon":         p.Lon,
+			"pole_id":        p.ID,
+			"dt_id":          p.DTID,
+			"seq_on_line":    p.SeqOnLine,
+			"children":       s.st.Children[p.ID],
+			"is_branch_point": p.IsBranchPoint,
+			"lat":            p.Lat,
+			"lon":            p.Lon,
 		}
 		if p.ParentPoleID != nil {
 			node["parent_id"] = *p.ParentPoleID
