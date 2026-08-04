@@ -2,18 +2,20 @@ package simulator
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 )
 
 type Server struct {
-	st    *SimulatorState
-	clock *Clock
-	te    *TelemetryEngine
+	st          *SimulatorState
+	clock       *Clock
+	te          *TelemetryEngine
+	broadcaster *Broadcaster
 }
 
-func NewServer(st *SimulatorState, clock *Clock, te *TelemetryEngine) *Server {
-	return &Server{st: st, clock: clock, te: te}
+func NewServer(st *SimulatorState, clock *Clock, te *TelemetryEngine, broadcaster *Broadcaster) *Server {
+	return &Server{st: st, clock: clock, te: te, broadcaster: broadcaster}
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -25,6 +27,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sim/faults", s.handleInjectFault)
 	mux.HandleFunc("POST /sim/faults/{id}", s.handleRepairFault)
 	mux.HandleFunc("POST /sim/faults/repair", s.handleRepairAll)
+	mux.HandleFunc("GET /sim/events/stream", s.handleEventsStream)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -85,15 +88,13 @@ func (s *Server) handleTopologyTree(w http.ResponseWriter, r *http.Request) {
 	for _, p := range s.st.GTPoles {
 		node := map[string]any{
 			"pole_id":        p.ID,
+			"parent_id":      p.ParentPoleID,
 			"dt_id":          p.DTID,
 			"seq_on_line":    p.SeqOnLine,
-			"children":       s.st.Children[p.ID],
 			"is_branch_point": p.IsBranchPoint,
+			"children":       s.st.Children[p.ID],
 			"lat":            p.Lat,
 			"lon":            p.Lon,
-		}
-		if p.ParentPoleID != nil {
-			node["parent_id"] = *p.ParentPoleID
 		}
 		gtNodes = append(gtNodes, node)
 	}
@@ -191,4 +192,39 @@ func (s *Server) handleRepairFault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRepairAll(w http.ResponseWriter, r *http.Request) {
 	s.te.RepairAll()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch, cancel := s.broadcaster.Subscribe()
+	defer cancel()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			if _, writeErr := fmt.Fprintf(w, "data: %s\n\n", data); writeErr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }

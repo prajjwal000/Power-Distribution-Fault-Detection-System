@@ -1,7 +1,9 @@
 import { useCallback } from "react"
 import { useFaultInjector } from "@/hooks/useFaultInjector"
+import { useSimulatorEvents } from "@/hooks/useSimulatorEvents"
 import { NetworkCanvas } from "@/components/fault-injector/NetworkCanvas"
 import { Legend } from "@/components/fault-injector/Legend"
+import { ClockDisplay } from "@/components/fault-injector/ClockDisplay"
 
 export function FaultInjector() {
   const {
@@ -15,6 +17,8 @@ export function FaultInjector() {
     select,
     updateTransform,
   } = useFaultInjector()
+
+  const { poleStates, lastEvent, connected } = useSimulatorEvents()
 
   const handleCollapseAll = useCallback(() => {
     const ids: string[] = []
@@ -35,6 +39,8 @@ export function FaultInjector() {
     <div className="flex h-full">
       {/* Canvas area */}
       <div className="relative flex-1 overflow-hidden">
+        <ClockDisplay />
+
         <NetworkCanvas
           nodes={nodes}
           links={links}
@@ -43,6 +49,8 @@ export function FaultInjector() {
           onSelect={select}
           onToggleCollapse={toggleCollapse}
           onTransformChange={updateTransform}
+          poleStates={poleStates}
+          lastEvent={lastEvent}
         />
         <Legend />
 
@@ -101,6 +109,13 @@ export function FaultInjector() {
 
         <div className="mt-4 text-[10px] text-muted-foreground">
           Nodes: {nodes.length} &middot; Edges: {links.length}
+        </div>
+
+        <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span
+            className={`inline-block size-1.5 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`}
+          />
+          {connected ? "Live" : "Disconnected"}
         </div>
       </div>
     </div>

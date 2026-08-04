@@ -1,9 +1,17 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useState } from "react"
 import type { PositionedNode, PositionedLink } from "@/lib/treeLayout"
+import type { PoleState, TelemetryEvent } from "@/hooks/useSimulatorEvents"
 
 export interface CanvasSelection {
   type: "node" | "edge"
   id: string
+}
+
+interface ActivePulse {
+  poleId: string
+  event: TelemetryEvent["event"]
+  startTime: number
+  duration: number
 }
 
 interface NetworkCanvasProps {
@@ -14,6 +22,8 @@ interface NetworkCanvasProps {
   onSelect: (sel: CanvasSelection[], multiSelect: boolean) => void
   onToggleCollapse: (nodeId: string) => void
   onTransformChange: (t: { x: number; y: number; k: number }) => void
+  poleStates?: Map<string, PoleState>
+  lastEvent?: TelemetryEvent | null
 }
 
 // ── Layout constants (must match treeLayout.ts) ──
@@ -39,10 +49,20 @@ const COLORS = {
   dtFill: "#5c1a1a",
   poleFill: "#d4d4d4",
   poleNoDevice: "transparent",
+  poleDark: "#991b1b",
   text: "#e5e5e5",
   textMuted: "#737373",
   indicatorFill: "#888",
 }
+
+const PULSE_COLORS: Record<string, string> = {
+  power_lost: "#ef4444",
+  power_restored: "#22c55e",
+  boot: "#f59e0b",
+  heartbeat: "#3b82f6",
+}
+
+const PULSE_DURATION = 3000
 
 // ── Geometry helpers ──
 
@@ -95,11 +115,13 @@ function drawNode(
   ctx: CanvasRenderingContext2D,
   node: PositionedNode,
   selected: boolean,
+  poleStates?: Map<string, PoleState>,
 ) {
   const isSelected = selected
 
   if (node.type === "pole") {
-    drawPole(ctx, node, isSelected)
+    const state = poleStates?.get(node.id)
+    drawPole(ctx, node, isSelected, state?.energized)
   } else if (node.type === "root") {
     // virtual root — tiny dot, not interactive
     ctx.beginPath()
@@ -115,6 +137,7 @@ function drawPole(
   ctx: CanvasRenderingContext2D,
   node: PositionedNode,
   selected: boolean,
+  energized?: boolean,
 ) {
   const r = NODE_RADIUS
 
@@ -129,9 +152,8 @@ function drawPole(
   ctx.beginPath()
 
   if (node.hasDevice) {
-    // Filled circle
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = COLORS.poleFill
+    ctx.fillStyle = energized === false ? COLORS.poleDark : COLORS.poleFill
     ctx.fill()
     ctx.strokeStyle = COLORS.nodeStroke
     ctx.lineWidth = 1
@@ -320,6 +342,8 @@ export function NetworkCanvas({
   onSelect,
   onToggleCollapse,
   onTransformChange,
+  poleStates,
+  lastEvent,
 }: NetworkCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -329,6 +353,10 @@ export function NetworkCanvas({
   const nodesRef = useRef(nodes)
   const linksRef = useRef(links)
   const selectionRef = useRef(selection)
+  const poleStatesRef = useRef(poleStates)
+  const nodeIndexRef = useRef(new Map<string, PositionedNode>())
+  const activePulsesRef = useRef<ActivePulse[]>([])
+  const rafIdRef = useRef<number | null>(null)
 
   const [dragging, setDragging] = useState(false)
   const dragRef = useRef({ startX: 0, startY: 0, startTx: 0, startTy: 0 })
@@ -360,7 +388,7 @@ export function NetworkCanvas({
 
     for (const node of nodesRef.current) {
       if (node.type === "root") continue
-      drawNode(ctx, node, isSelected(selectionRef.current, "node", node.id))
+      drawNode(ctx, node, isSelected(selectionRef.current, "node", node.id), poleStatesRef.current)
     }
 
     ctx.restore()
@@ -378,6 +406,106 @@ export function NetworkCanvas({
     selectionRef.current = selection
     doRender()
   }, [selection, doRender])
+
+  // ── Pole state tracking ──
+
+  useEffect(() => {
+    poleStatesRef.current = poleStates
+    doRender()
+  }, [poleStates, doRender])
+
+  // ── Build node index for fast pole lookup ──
+
+  useEffect(() => {
+    const index = new Map<string, PositionedNode>()
+    for (const node of nodes) {
+      if (node.type === "pole") {
+        index.set(node.id, node)
+      }
+    }
+    nodeIndexRef.current = index
+  }, [nodes])
+
+  // ── Draw pulse overlays ──
+
+  const drawPulseOverlay = useCallback((now: number) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    const t = transformRef.current
+
+    ctx.save()
+    ctx.translate(t.x, t.y)
+    ctx.scale(t.k, t.k)
+
+    for (const pulse of activePulsesRef.current) {
+      const node = nodeIndexRef.current.get(pulse.poleId)
+      if (!node) continue
+
+      const progress = (now - pulse.startTime) / pulse.duration
+      const radius = NODE_RADIUS + 20 * progress
+      const opacity = 0.8 * (1 - progress)
+
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, radius, 0, Math.PI * 2)
+      ctx.globalAlpha = opacity
+      ctx.strokeStyle = PULSE_COLORS[pulse.event] ?? "#888"
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+
+    ctx.globalAlpha = 1
+    ctx.restore()
+  }, [])
+
+  // ── Pulse animation: add pulse on new event ──
+
+  useEffect(() => {
+    if (!lastEvent) return
+
+    activePulsesRef.current.push({
+      poleId: lastEvent.pole_id,
+      event: lastEvent.event,
+      startTime: performance.now(),
+      duration: PULSE_DURATION,
+    })
+
+    // Start rAF loop if not already running
+    if (rafIdRef.current === null) {
+      const tick = () => {
+        const now = performance.now()
+
+        // Remove expired pulses
+        activePulsesRef.current = activePulsesRef.current.filter(
+          (p) => now - p.startTime < p.duration,
+        )
+
+        if (activePulsesRef.current.length === 0) {
+          rafIdRef.current = null
+          doRender()
+          return
+        }
+
+        doRender()
+        drawPulseOverlay(now)
+
+        rafIdRef.current = requestAnimationFrame(tick)
+      }
+
+      rafIdRef.current = requestAnimationFrame(tick)
+    }
+  }, [lastEvent, doRender, drawPulseOverlay])
+
+  // ── Cleanup rAF on unmount ──
+
+  useEffect(() => {
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
+    }
+  }, [])
 
   // ── Canvas resize ──
 

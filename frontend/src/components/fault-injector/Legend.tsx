@@ -54,6 +54,44 @@ export function Legend() {
           </svg>
           <span className="text-muted-foreground">Unknown edge</span>
         </div>
+
+        <Separator className="my-0.5" />
+
+        <div className="flex items-center gap-2">
+          <svg width="16" height="16">
+            <circle cx="8" cy="8" r="4" fill="#991b1b" stroke="#d4d4d4" strokeWidth="0.8" />
+          </svg>
+          <span className="text-muted-foreground">Pole (dark)</span>
+        </div>
+
+        <Separator className="my-0.5" />
+
+        <div className="mb-1 font-medium text-foreground">Event pulses</div>
+
+        <div className="flex items-center gap-2">
+          <svg width="16" height="16">
+            <circle cx="8" cy="8" r="5" fill="none" stroke="#ef4444" strokeWidth="1.5" />
+          </svg>
+          <span className="text-muted-foreground">Power lost</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <svg width="16" height="16">
+            <circle cx="8" cy="8" r="5" fill="none" stroke="#22c55e" strokeWidth="1.5" />
+          </svg>
+          <span className="text-muted-foreground">Power restored</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <svg width="16" height="16">
+            <circle cx="8" cy="8" r="5" fill="none" stroke="#f59e0b" strokeWidth="1.5" />
+          </svg>
+          <span className="text-muted-foreground">Boot</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <svg width="16" height="16">
+            <circle cx="8" cy="8" r="5" fill="none" stroke="#3b82f6" strokeWidth="1.5" />
+          </svg>
+          <span className="text-muted-foreground">Heartbeat</span>
+        </div>
       </div>
     </div>
   )

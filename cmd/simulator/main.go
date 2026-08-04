@@ -37,15 +37,21 @@ func main() {
 	clock := simulator.NewClock(cfg.clockMultiplier)
 
 	ingest := simulator.NewIngestClient(cfg.apiURL)
+	broadcaster := simulator.NewBroadcaster()
 
-	te := simulator.NewTelemetryEngine(st, clock, ingest.Emit)
+	fanout := func(event simulator.TelemetryEvent) {
+		ingest.Emit(event)
+		broadcaster.Publish(event)
+	}
+
+	te := simulator.NewTelemetryEngine(st, clock, fanout)
 	te.Start()
 
 	log.Println("[simulator] running backfill...")
-	simulator.Backfill(st, clock, ingest.Emit)
+	simulator.Backfill(st, clock, fanout)
 
 	mux := http.NewServeMux()
-	svr := simulator.NewServer(st, clock, te)
+	svr := simulator.NewServer(st, clock, te, broadcaster)
 	svr.Register(mux)
 
 	srv := &http.Server{Addr: cfg.addr(), Handler: mux}

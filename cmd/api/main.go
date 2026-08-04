@@ -66,7 +66,27 @@ func env(key, fallback string) string {
 func routes(cfg apiConfig) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
+	mux.HandleFunc("POST /ingest", handleIngest())
 	return mux
+}
+
+func handleIngest() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var event map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+
+		if poleID, ok := event["pole_id"].(string); ok {
+			if evt, ok := event["event"].(string); ok {
+				log.Printf("[api] ingest: pole=%s event=%s", poleID, evt)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
 }
 
 func handleHealthz(cfg apiConfig) http.HandlerFunc {
