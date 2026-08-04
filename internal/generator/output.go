@@ -12,7 +12,7 @@ import (
 )
 
 func ExportCSV(net *GeneratedNetwork, registry *RegistryData, dir string) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
 
@@ -31,15 +31,15 @@ func exportTransformerCSV(transformers []model.Transformer, path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // CSV close in defer, nothing to recover
 
 	w := csv.NewWriter(f)
 	defer w.Flush()
 
-	w.Write([]string{"dt_id", "feeder_id", "lat", "lon", "capacity_kva", "households_served"})
+	_ = w.Write([]string{"dt_id", "feeder_id", "lat", "lon", "capacity_kva", "households_served"})
 
 	for _, dt := range transformers {
-		w.Write([]string{
+		_ = w.Write([]string{
 			dt.ID,
 			dt.FeederID,
 			strconv.FormatFloat(dt.Lat, 'f', 6, 64),
@@ -57,12 +57,12 @@ func exportPoleCSV(poles []model.Pole, path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // CSV close in defer, nothing to recover
 
 	w := csv.NewWriter(f)
 	defer w.Flush()
 
-	w.Write([]string{"pole_id", "lat", "lon", "feeder_id", "dt_id", "seq_on_line", "parent_pole_id", "pole_type", "ward", "pincode", "device_id"})
+	_ = w.Write([]string{"pole_id", "lat", "lon", "feeder_id", "dt_id", "seq_on_line", "parent_pole_id", "pole_type", "ward", "pincode", "device_id"})
 
 	for _, p := range poles {
 		seqStr := ""
@@ -82,7 +82,7 @@ func exportPoleCSV(poles []model.Pole, path string) error {
 			devStr = *p.DeviceID
 		}
 
-		w.Write([]string{
+		_ = w.Write([]string{
 			p.ID,
 			strconv.FormatFloat(p.Lat, 'f', 6, 64),
 			strconv.FormatFloat(p.Lon, 'f', 6, 64),
@@ -105,7 +105,7 @@ func SeedDB(ctx context.Context, dbURL string, net *GeneratedNetwork, registry *
 	if err != nil {
 		return fmt.Errorf("connect to db: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer conn.Close(ctx) //nolint:errcheck // pgx close in defer, nothing to recover
 
 	schemaSQL, err := os.ReadFile("internal/db/schema.sql")
 	if err != nil {
@@ -190,7 +190,8 @@ func seedGTTopology(ctx context.Context, conn *pgx.Conn, poles []model.GTPole) e
 
 func seedPoles(ctx context.Context, conn *pgx.Conn, poles []model.Pole) error {
 	rows := make([][]any, len(poles))
-	for i, p := range poles {
+	for i := range poles {
+		p := &poles[i]
 		rows[i] = []any{
 			p.ID, p.DTID, p.FeederID, p.Lat, p.Lon,
 			p.SeqOnLine, p.ParentPoleID, p.PoleType, p.Ward, p.Pincode, p.DeviceID,

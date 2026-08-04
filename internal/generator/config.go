@@ -44,22 +44,23 @@ func DefaultConfig() Config {
 func ConfigForPoleCount(targetPoles int) Config {
 	cfg := DefaultConfig()
 
-	if targetPoles < 500 {
+	switch {
+	case targetPoles < 500:
 		cfg.SubstationCount = 1
 		cfg.FeedersPerSub = 2
 		cfg.DTsPerFeeder = Range{Min: 3, Max: 5}
 		cfg.PolesPerDT = Range{Min: 20, Max: 80}
-	} else if targetPoles < 2000 {
+	case targetPoles < 2000:
 		cfg.SubstationCount = 1
 		cfg.FeedersPerSub = 3
 		cfg.DTsPerFeeder = Range{Min: 5, Max: 7}
 		cfg.PolesPerDT = Range{Min: 30, Max: 120}
-	} else if targetPoles < 5000 {
+	case targetPoles < 5000:
 		cfg.SubstationCount = 2
 		cfg.FeedersPerSub = 3
 		cfg.DTsPerFeeder = Range{Min: 6, Max: 8}
 		cfg.PolesPerDT = Range{Min: 40, Max: 150}
-	} else {
+	default:
 		cfg.SubstationCount = 2
 		cfg.FeedersPerSub = 4
 		cfg.DTsPerFeeder = Range{Min: 8, Max: 12}

@@ -25,7 +25,7 @@ func main() {
 		<-ch
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		srv.Shutdown(ctx)
+		_ = srv.Shutdown(ctx)
 	}()
 
 	log.Printf("simulator listening on %s", cfg.addr())
@@ -36,15 +36,15 @@ func main() {
 }
 
 type simConfig struct {
-	port           string
-	apiURL         string
+	port            string
+	apiURL          string
 	clockMultiplier int
 }
 
 func readConfig() simConfig {
 	return simConfig{
-		port:           env("SIM_PORT", "8081"),
-		apiURL:         env("API_URL", "http://localhost:8080"),
+		port:            env("SIM_PORT", "8081"),
+		apiURL:          env("API_URL", "http://localhost:8080"),
 		clockMultiplier: intEnv("CLOCK_MULTIPLIER", 30),
 	}
 }
@@ -74,22 +74,22 @@ func routes(cfg simConfig) *http.ServeMux {
 }
 
 type healthResponse struct {
-	Service  string `json:"service"`
-	Status   string `json:"status"`
-	Detail   string `json:"detail,omitempty"`
-	Multiplier int   `json:"multiplier,omitempty"`
-	Time     string `json:"time"`
+	Service    string `json:"service"`
+	Status     string `json:"status"`
+	Detail     string `json:"detail,omitempty"`
+	Multiplier int    `json:"multiplier,omitempty"`
+	Time       string `json:"time"`
 }
 
 func handleHealthz(cfg simConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, _ := json.Marshal(healthResponse{
-			Service:   "simulator",
-			Status:    "ok",
+			Service:    "simulator",
+			Status:     "ok",
 			Multiplier: cfg.clockMultiplier,
-			Time:      time.Now().UTC().Format(time.RFC3339),
+			Time:       time.Now().UTC().Format(time.RFC3339),
 		})
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(body)
+		_, _ = w.Write(body)
 	}
 }

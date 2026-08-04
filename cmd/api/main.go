@@ -27,7 +27,7 @@ func main() {
 		<-ch
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		srv.Shutdown(ctx)
+		_ = srv.Shutdown(ctx)
 	}()
 
 	log.Printf("api listening on %s", cfg.addr())
@@ -91,6 +91,6 @@ func handleHealthz(cfg apiConfig) http.HandlerFunc {
 		if status != "ok" {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		w.Write(body)
+		_, _ = w.Write(body)
 	}
 }
