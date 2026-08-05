@@ -103,7 +103,7 @@ func (te *TelemetryEngine) tick() {
 func (te *TelemetryEngine) emitEventLocked(dev *DeviceState, simNow int64) {
 	dev.Seq++
 	evSim := dev.NextEmitSim
-	ts := tsForSim(evSim, dev.ClockSkewSecs)
+	ts := te.clock.TsForSim(evSim, dev.ClockSkewSecs)
 	evt := TelemetryEvent{
 		DeviceID:  dev.DeviceID,
 		PoleID:    dev.PoleID,
@@ -157,7 +157,7 @@ func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
 			PoleID:    dev.PoleID,
 			Event:     "power_lost",
 			Energized: false,
-			Ts:        tsForSim(evSim, dev.ClockSkewSecs),
+			Ts:        te.clock.TsForSim(evSim, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
 			RSSI:      dev.RSSI,
@@ -227,7 +227,7 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string) {
 			PoleID:    dev.PoleID,
 			Event:     "boot",
 			Energized: false,
-			Ts:        tsForSim(simNow, dev.ClockSkewSecs),
+			Ts:        te.clock.TsForSim(simNow, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
 			RSSI:      dev.RSSI,
@@ -241,7 +241,7 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string) {
 			PoleID:    dev.PoleID,
 			Event:     "power_restored",
 			Energized: true,
-			Ts:        tsForSim(restoreSim, dev.ClockSkewSecs),
+			Ts:        te.clock.TsForSim(restoreSim, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
 			RSSI:      dev.RSSI,
@@ -254,10 +254,4 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string) {
 	}
 }
 
-func tsForSim(evSim, skewSecs int64) string {
-	bootWall := time.Now()
-	simElapsed := time.Duration(evSim+skewSecs) * time.Second
-	wallElapsed := simElapsed / time.Duration(30)
-	actual := bootWall.Add(-wallElapsed)
-	return actual.UTC().Format("2006-01-02T15:04:05.000Z")
-}
+
