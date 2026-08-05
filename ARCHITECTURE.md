@@ -45,7 +45,7 @@ The **registry** is the API's source of truth for topology. Where `parent_pole_i
 
 The simulator models the pole-device fleet as independent actors, not a list of fake events.
 
-**Virtual clock.** The simulator owns time. `sim_time` advances at `multiplier ×` wall time (default 30×, runtime-adjustable via `POST /clock`). Every timestamp in the system — telemetry `ts`, fault start, scheduled-outage windows — lives in this sim-time base. The API is a clock client: it reads `GET /sim/clock` (proxied as `GET /clock`) rather than keeping its own, so a multiplier change in the UI cannot cause the two services to drift.
+**Virtual clock.** The simulator owns time. `sim_time` advances at `multiplier ×` wall time (default 30×, runtime-adjustable via `POST /clock`). **Changing the multiplier rebases the clock anchor** so sim time never jumps discontinuously — the current sim instant becomes the new `bootSimTime` and `now` becomes the new `bootWallTime`. Every timestamp in the system — telemetry `ts`, fault start, scheduled-outage windows — lives in this sim-time base. The API is a clock client: it reads `GET /sim/clock` (proxied as `GET /clock`) rather than keeping its own, so a multiplier change in the UI cannot cause the two services to drift.
 
 **Per-device telemetry model.** Each device has a fixed profile:
 
@@ -54,8 +54,25 @@ The simulator models the pole-device fleet as independent actors, not a list of 
 - **Radio quality**: RSSI-derived transmission delay (`max(0, |rssi|−75)·2 s`). A downstream device with good radio can reach the API before the fault pole does.
 - **Delivery**: `power_lost` succeeds ~70% of the time for fw ≥ 1.3 (capacitor reserve), 0% for fw 1.2.x.
 - **Heartbeats**: every 900 s ± 45 s, scheduled per device so steady-state traffic is spread across the window rather than bunched.
+- **Warm-up**: at simulator boot, each device sends its first heartbeat (seq=1) at a random instant within a 120 s window, establishing the energized baseline without a startup burst or fabricated `boot`/`power_restored` events.
 
-Events are emitted through a min-heap keyed by each device's scheduled wall-clock time, so the simulator delivers out-of-order arrival the same way the real network would.
+**Unified delivery queue.** All events — heartbeats, fault telemetry, restoration, noise — flow through a single min-heap keyed by **sim-time delivery instant** (`deliverAtSim`). A dispatcher polls the clock (~50 ms wall) and feeds a worker pool (8 workers) that calls the fan-out emitter (API ingest + SSE broadcast). This means:
+
+- Emission happens off the engine lock — a slow API cannot stall heartbeat scheduling or fault injection.
+- Radio delay offsets `deliverAtSim`, producing true out-of-order arrivals (a downstream device with good radio can be delivered before the fault pole).
+- Pausing the clock freezes delivery entirely; events scheduled during pause are delivered on resume.
+- Device clock skew is applied in the wall domain (`ts = WallForSim(eventSim) + skewSecs`), so the ±90 s spread is independent of the multiplier.
+
+**Fault injection.** Supports three types via `POST /sim/faults`: span (`{type:"span", parent_id, child_id}`), DT (`{type:"dt", target_id}`), feeder (`{type:"feeder", target_id}`). Each validates against ground-truth topology, returns a unique sequential fault ID, and queues `power_lost` for affected devices with the correct delivery times.
+
+**Noise injection.** `POST /sim/noise` supports:
+- `device_death`: stops heartbeats while power stays on (tests dead-sensor detection)
+- `duplicate`: re-emits a recent event with the same seq (at-least-once)
+- `stale_replay`: emits an old `power_lost` with a stale timestamp/seq (6-hour retry)
+
+**Scheduled outages.** `GET /scheduled-outages?from=...&to=...` returns a deterministic mock feed (feeder/DT scopes, 20–40 min overruns, ~10% listed-but-cancelled). The future API will use this to suppress tickets.
+
+**Restoration.** On repair, each device sends `boot` then `power_restored` staggered by 0–20 sim seconds (per spec "typically within 20 seconds"), both through the delivery queue with radio delay. Overlapping faults are handled correctly: a pole re-energizes only if no other active fault still covers it.
 
 ## Localization algorithm
 
@@ -63,29 +80,44 @@ Events are emitted through a min-heap keyed by each device's scheduled wall-cloc
 
 ## Noise handling
 
-*Not yet implemented*
+The simulator provides explicit noise injection for testing the detection pipeline:
+
+| Kind | Effect |
+|------|--------|
+| `device_death` | Selected device(s) stop heartbeating while power stays on; no `power_lost` is sent. Tests the "dead sensor vs real outage" logic. |
+| `duplicate` | Re-emits a recent event (same seq) from a device. Tests at-least-once deduplication. |
+| `stale_replay` | Emits a `power_lost` with a timestamp ~2 hours in the past (sim) and original seq. Tests the 6-hour retry behavior. |
+
+Scheduled outages are published via the mock feed; the simulator honors them by darkening the scope's devices with normal `power_lost` telemetry and restoring after the window. The future API uses the feed to avoid false tickets during outage windows.
 
 ## API surface
 
-*Not yet implemented. Planned endpoints:*
+Implemented endpoints:
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/ingest` | Telemetry from devices and simulator |
+| POST | `/ingest` | Telemetry from devices and simulator (stub — logs only) |
+| GET | `/clock` | Current sim time and multiplier |
+| POST | `/clock` | Set multiplier, step time, or pause/resume |
+| GET | `/sim/topology/tree` | Ground-truth hierarchy (simulator) |
+| GET | `/sim/faults` | List active faults |
+| POST | `/sim/faults` | Inject fault (span/dt/feeder) |
+| POST | `/sim/faults/{id}` | Repair one fault |
+| POST | `/sim/faults/repair` | Repair all active faults |
+| POST | `/sim/noise` | Inject noise (device_death/duplicate/stale_replay) |
+| GET | `/scheduled-outages` | Mock planned-outage feed |
+| GET | `/sim/events/stream` | SSE stream of all telemetry events |
+
+Planned (not yet implemented):
+
+| Method | Path | Purpose |
+|--------|------|---------|
 | GET | `/tickets` | List tickets, filterable by status, age |
 | GET | `/tickets/:id` | Ticket detail with evidence |
 | PATCH | `/tickets/:id` | Advance lifecycle (acknowledge, assign crew, resolve) — resolve rejected if telemetry still dark |
 | GET | `/tickets/:id/evidence` | Last N telemetry events that contributed to detection |
-| GET | `/clock` | Current sim time and multiplier |
-| POST | `/clock` | Set multiplier or step time |
 | GET | `/poles` | Registry poles with last known state |
 | GET | `/network/tree` | Registry-known hierarchy (not ground truth) |
-| GET | `/sim/topology/tree` | Ground-truth hierarchy — served by simulator, not API |
-| POST | `/sim/faults` | Inject fault — simulator endpoint |
-| POST | `/sim/faults/:id` | Repair one fault — simulator endpoint |
-| POST | `/sim/faults/repair` | Repair all active faults — simulator endpoint |
-| POST | `/sim/noise` | Inject noise — simulator endpoint |
-| GET | `/scheduled-outages` | Mock feed — simulator endpoint |
 
 ## UI reasoning
 
@@ -111,17 +143,18 @@ The fault injector shows the full ground-truth network as an interactive node-li
 - `collapsedIds` and `transform` (zoom/pan): sessionStorage, restored on mount — operator's view is stable across tab switches
 - `selection`: component-local, resets on tab switch — not persisted
 
-**Context shape** (`FaultInjectorContext`): `{ nodes, links, collapsedIds, selection, transform, toggleCollapse, expandAll, collapseAll, select, updateTransform }`. The context is designed so future server event handlers can call `updateNodes()` or `updateNode()` without restructuring the tree layout or canvas component.
+**Context shape** (`FaultInjectorContext`): `{ nodes, links, networkData, collapsedIds, selection, transform, toggleCollapse, expandAll, collapseAll, select, updateTransform }`. The context is designed so future server event handlers can call `updateNodes()` or `updateNode()` without restructuring the tree layout or canvas component.
 
 **Node rendering**:
 - Substation/Feeder/DT: labeled rectangles with type badge and downstream count badge
-- Pole (has device): filled circle
+- Pole (has device): filled circle (white when energized, dark red when de-energized)
 - Pole (no device): hollow dashed circle
 - No distinct marker for branch points — multiple outgoing edges convey the branching visually
 
 **Edge rendering**:
 - Solid line: edge is known in registry (child has `parent_pole_id`)
 - Dashed line: edge is unknown in registry (the ~60% DT topology gap — visually obvious on DTs with `has_topology: false`)
+- Active fault: highlighted red with an ✕ marker at the midpoint of the faulted span
 
 **Interactions**:
 - Mouse wheel: zoom (centered on cursor)
@@ -130,7 +163,12 @@ The fault injector shows the full ground-truth network as an interactive node-li
 - Click on edge: select (14px hit detection threshold)
 - Click on expand/collapse indicator: toggle subtree visibility
 - Click on empty canvas: deselect
+- Ctrl+click: multi-select
 
-## AI feature
+**Pulse animations**: Telemetry events from the SSE stream spawn expanding rings on the affected pole (color-coded: red `power_lost`, green `power_restored`, amber `boot`, blue `heartbeat`). Events are batched at ~10 Hz to avoid per-event React re-renders during bursts. The canvas redraw loop runs on `requestAnimationFrame` while pulses are active.
+
+**Auto-expand on inject**: When a fault is injected, all collapsed ancestors of the affected poles (up through DT → feeder → substation) are automatically expanded so the operator immediately sees the pulse animation.
+
+### AI feature
 
 *Not yet determined.* One paragraph to be added when the feature is chosen. Required: what it does, why that spot specifically, cost per call, and what happens when the model is unavailable.

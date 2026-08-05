@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-08-05 — Restoration stagger realism
+
+On repair, each device's `power_restored` is delayed by a random 0–20 sim seconds (per spec "typically within 20 seconds"), both `boot` and `power_restored` go through the delivery queue with radio delay. This creates a realistic cascade of restoration events rather than a synchronized burst.
+
+## 2026-08-05 — Noise injection and scheduled outages
+
+`POST /sim/noise` supports three kinds: `device_death` (stops heartbeats, power stays on), `duplicate` (re-emit same seq), `stale_replay` (old `power_lost` with past timestamp). `GET /scheduled-outages` returns a deterministic mock feed (feeder/DT scopes, 20–40 min overruns, ~10% cancellations). The simulator honors outage windows by darkening the scope's devices with normal `power_lost` telemetry and restoring after. The future API will use the feed to suppress tickets.
+
+## 2026-08-05 — Frontend event batching for SSE performance
+
+Steady state at 30× is ~100 events/wall-second; a fault burst is hundreds of events in seconds. The original per-event `setState` caused hundreds of React re-renders + full canvas redraws per second. `useSimulatorEvents` now buffers incoming SSE messages and flushes `poleStates` at ~10 Hz in a single `setState`, while `lastEvent` (which drives pulse animations) is updated per batch. This eliminates the burst performance cliff and ensures no pulses are dropped due to React batching.
+
 ## 2026-08-05 — Simulator owns the virtual clock; the API is a clock client
 
 Time is the crux of the whole demo: scheduled-outage windows, fault timing, and "how long ago was this detected" all need one shared time base. The simulator owns it — `sim_time` advances at `multiplier ×` wall time (default 30×), and the API reads `GET /sim/clock` instead of keeping its own clock. This makes runtime multiplier changes in the UI safe: with only one clock, the two services cannot drift.
@@ -27,3 +39,5 @@ The simulator does not call a special internal API to report faults. It computes
 ## 2026-08-03 — Simulator has omniscient ground-truth view; API has no access to it
 
 The system has two completely separate data stores: `gt_topology` (complete parent-child edges, branch points, sequence numbers — simulator-only) and the registry (`poles`, `transformers`, `feeders` — what the API and operator see). The fault injector is built on top of ground truth so it can target any span, DT, or feeder by ID, and so the injection stats (expected dark poles vs observed reports) are meaningful for demonstrating the telemetry model. The API never queries `gt_topology`; it works only from registry data and telemetry. This keeps the simulator's advantage honest — it can pick any fault target, but the detection itself must work from what the system actually knows.
+
+

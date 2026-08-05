@@ -37,7 +37,9 @@ func TestInjectDeviceDeath(t *testing.T) {
 	}
 
 	// Targeted device death
-	te.InjectDeviceDeath("D-1", 1)
+	if err := te.InjectDeviceDeath("D-1", 1); err != nil {
+		t.Fatalf("InjectDeviceDeath: %v", err)
+	}
 	if st.Devices["D-1"].NextEmitSim != 0 {
 		t.Error("D-1 should have NextEmitSim=0 after targeted death")
 	}
