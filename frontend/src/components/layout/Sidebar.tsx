@@ -1,11 +1,12 @@
 import { NavLink } from "react-router-dom"
-import { GearSix, House, Lightning } from "@phosphor-icons/react"
+import { GearSix, House, Lightning, MapPin } from "@phosphor-icons/react"
 
 const navItems = [
   {
     group: "Operations",
     items: [
       { to: "/", label: "Dashboard", icon: House },
+      { to: "/map", label: "Map", icon: MapPin },
     ],
   },
   {

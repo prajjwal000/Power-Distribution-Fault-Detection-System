@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -97,7 +98,9 @@ func routes(cfg apiConfig, ing *ingestor.Ingestor, engine *detect.Engine, topo *
 	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
 	mux.HandleFunc("POST /ingest", handleIngest(ing, engine))
 	mux.HandleFunc("GET /tickets", handleGetTickets(engine))
+	mux.HandleFunc("PATCH /tickets/", handlePatchTicket(engine))
 	mux.HandleFunc("GET /tickets/stream", handleTicketsStream(engine))
+	mux.HandleFunc("GET /network/inferred-topology", handleInferredTopology(topo))
 	mux.HandleFunc("GET /stats", handleStats(ing, topo))
 	return mux
 }
@@ -208,5 +211,75 @@ func handleHealthz(cfg apiConfig) http.HandlerFunc {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
 		_, _ = w.Write(body)
+	}
+}
+
+func handlePatchTicket(engine *detect.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		id := strings.TrimPrefix(path, "/tickets/")
+		if id == "" {
+			http.Error(w, "missing ticket id", http.StatusBadRequest)
+			return
+		}
+
+		var req struct {
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+
+		ticket := engine.GetTicket(id)
+		if ticket == nil {
+			http.Error(w, "ticket not found", http.StatusNotFound)
+			return
+		}
+
+		switch req.Status {
+		case "acknowledged":
+			if ticket.Status != "active" {
+				http.Error(w, "can only acknowledge active tickets", http.StatusBadRequest)
+				return
+			}
+			ticket.Status = "acknowledged"
+		case "resolved":
+			if ticket.Status != "verified" && ticket.Status != "acknowledged" {
+				http.Error(w, "can only resolve verified tickets", http.StatusBadRequest)
+				return
+			}
+			now := time.Now()
+			ticket.Status = "resolved"
+			ticket.ResolvedAt = &now
+		default:
+			http.Error(w, "invalid status", http.StatusBadRequest)
+			return
+		}
+
+		engine.Broadcaster().Broadcast(detect.TicketUpdate{
+			Type:   "ticket_updated",
+			Ticket: *ticket,
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ticket)
+	}
+}
+
+func handleInferredTopology(topo *detect.TopologyIndex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		dtID := r.URL.Query().Get("dt_id")
+		if dtID == "" {
+			http.Error(w, "missing dt_id parameter", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"dt_id":  dtID,
+			"edges":  []any{},
+			"method": "mst_radial",
+		})
 	}
 }

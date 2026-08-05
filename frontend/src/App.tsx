@@ -2,6 +2,8 @@ import { Routes, Route } from "react-router-dom"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { FaultInjectorProvider } from "@/context/FaultInjectorContext"
 import { FaultInjector } from "@/pages/FaultInjector"
+import { Dashboard } from "@/pages/Dashboard"
+import { MapPage } from "@/pages/Map"
 import { useTopology } from "@/hooks/useTopology"
 import { Lightning, Warning } from "@phosphor-icons/react"
 
@@ -17,7 +19,8 @@ export function App() {
         {data && (
           <FaultInjectorProvider data={data}>
             <Routes>
-              <Route path="/" element={<DashboardPlaceholder />} />
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/map" element={<MapPage />} />
               <Route path="/fault-injector" element={<FaultInjector />} />
             </Routes>
           </FaultInjectorProvider>
@@ -45,14 +48,6 @@ function ErrorState({ message }: { message: string }) {
       <p className="max-w-md text-xs text-muted-foreground">
         Make sure the simulator is running on port 8081.
       </p>
-    </div>
-  )
-}
-
-function DashboardPlaceholder() {
-  return (
-    <div className="flex h-full items-center justify-center text-muted-foreground">
-      Dashboard — coming soon
     </div>
   )
 }

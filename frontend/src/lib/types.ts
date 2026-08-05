@@ -69,3 +69,46 @@ export interface NetworkData {
   registry_poles: RegistryPole[]
   dt_topology_status: DTTopologyStatus[]
 }
+
+export type TicketStatus = "active" | "verified" | "resolved"
+export type TicketSeverity = "critical" | "major" | "minor"
+export type TicketScope = "span" | "dt" | "feeder"
+
+export interface Location {
+  lat: number
+  lon: number
+}
+
+export interface TicketEvent {
+  event: string
+  energized: boolean
+  reported: boolean
+  ts: string
+  seq: number
+  battery_mv: number
+  rssi: number
+  fw: string
+  received_at: string
+  pole_id: string
+  device_id: string
+}
+
+export interface Ticket {
+  id: string
+  status: TicketStatus
+  severity: TicketSeverity
+  scope: TicketScope
+  target_id: string
+  dt_id: string
+  feeder_id: string
+  affected_count: number
+  affected_poles: string[]
+  confidence: number
+  evidence: TicketEvent[]
+  detected_at: string
+  verified_at: string | null
+  resolved_at: string | null
+  pincode: string | null
+  location: Location | null
+  is_refined: boolean
+}
