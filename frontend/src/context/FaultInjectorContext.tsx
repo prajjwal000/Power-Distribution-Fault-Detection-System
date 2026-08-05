@@ -37,6 +37,7 @@ function loadTransform(): { x: number; y: number; k: number } | null {
 interface FaultInjectorContextValue {
   nodes: PositionedNode[]
   links: PositionedLink[]
+  networkData: NetworkData
   collapsedIds: Set<string>
   selection: CanvasSelection[]
   transform: { x: number; y: number; k: number } | null
@@ -122,6 +123,7 @@ export function FaultInjectorProvider({ children, data, initialCollapsedIds }: F
   const value: FaultInjectorContextValue = {
     nodes,
     links,
+    networkData: data,
     collapsedIds,
     selection,
     transform,

@@ -19,6 +19,7 @@ export function FaultInjector() {
     select,
     updateTransform,
     collapsedIds,
+    networkData,
   } = useFaultInjector()
 
   const { poleStates, lastEvent, connected } = useSimulatorEvents()
@@ -43,20 +44,64 @@ export function FaultInjector() {
 
   // Auto-expand ancestors of a faulted area
   const ensureVisible = useCallback((poleIds: string[]) => {
+    if (!networkData) return
     const toExpand = new Set<string>()
+
+    // Build parent map from gt_topology: pole -> parent pole (or DT)
+    const poleParentMap = new Map<string, string | null>()
+    for (const gt of networkData.gt_topology) {
+      poleParentMap.set(gt.pole_id, gt.parent_id)
+    }
+
+    // Build DT -> feeder map
+    const dtFeederMap = new Map<string, string>()
+    for (const dt of networkData.transformers) {
+      dtFeederMap.set(dt.id, dt.feeder_id)
+    }
+
+    // Build feeder -> substation map
+    const feederSubstationMap = new Map<string, string>()
+    for (const feeder of networkData.feeders) {
+      feederSubstationMap.set(feeder.id, feeder.substation_id)
+    }
+
     for (const pid of poleIds) {
-      let current = pid
+      let current: string | null = pid
       while (current && collapsedIds.has(current)) {
         toExpand.add(current)
-        const node = nodes.find((n) => n.id === current)
-        if (!node || node.type === "pole") break
-        // For containers, parent is in the tree hierarchy
-        // This is simplified - the real parent would be found via data
-        current = ""
+        const parent = poleParentMap.get(current)
+        if (parent) {
+          // Parent is another pole
+          current = parent
+        } else {
+          // current is a root pole under a DT; find its DT
+          const poleNode = networkData.gt_topology.find((gt) => gt.pole_id === current)
+          if (poleNode) {
+            current = poleNode.dt_id
+          } else {
+            current = null
+          }
+        }
+      }
+      // If we exited the loop because current was not collapsed, we may have reached a DT/feeder/substation
+      // that IS collapsed - check and add it
+      while (current && collapsedIds.has(current)) {
+        toExpand.add(current)
+        const feederId = dtFeederMap.get(current)
+        if (feederId) {
+          current = feederId
+        } else {
+          const substationId = feederSubstationMap.get(current)
+          if (substationId) {
+            current = substationId
+          } else {
+            current = null
+          }
+        }
       }
     }
     toExpand.forEach((id) => toggleCollapse(id))
-  }, [nodes, collapsedIds, toggleCollapse])
+  }, [networkData, collapsedIds, toggleCollapse])
 
   const handleInject = useCallback(async (target: { type: "span" | "dt" | "feeder"; parent_id?: string; child_id?: string; target_id?: string }) => {
     setInjecting(true)
