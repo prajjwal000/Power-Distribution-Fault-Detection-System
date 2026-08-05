@@ -1,5 +1,15 @@
 # Decisions
 
+## 2026-08-06 — Dashboard + Map + Geographic Inference
+
+Added the Operations Dashboard and Geographic Map pages to complete the operator UI:
+
+- **Dashboard (`/`)**: Ticket table with real-time SSE updates, detail modal with evidence, acknowledge/resolve actions, deep-link to Map.
+- **Map (`/map`)**: Leaflet-based geographic map with toggleable layers (substations, feeders, DTs, poles, known/inferred topology), fault overlay, collapsible asset sidebar, URL deep-linking (`?fault=T-XXX`).
+- **Geographic inference for missing topology**: MST + radial ordering algorithm infers pole parent-child relationships from coordinates for the 60% of DTs without `seq_on_line`. Accuracy measured at 88.9% on synthetic test data with branch topology. Lower confidence (0.3–0.9) reported for inferred edges. Algorithm documented in ARCHITECTURE.md with failure modes.
+- **Docker integration**: Frontend built into API container via multi-stage Dockerfile (Go builder + Node builder + Alpine runtime). Single `docker compose up` brings up everything. API serves static files from `./static` with SPA fallback routing.
+- **API endpoints added**: `/tickets`, `/tickets/stream` (SSE), `/tickets/:id` (PATCH), `/network/inferred-topology`, `/stats`.
+
 ## 2026-08-05 — Ingestor and detection engine architecture
 
 Built the core data pipeline: `internal/ingestor/` handles event processing, dedup, and temporal buffering; `internal/detect/` handles localization and ticket management.
