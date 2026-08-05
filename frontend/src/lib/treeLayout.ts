@@ -192,7 +192,7 @@ const DX_POLE = 60
 // Vertical spacing between sibling nodes
 const DY = 32
 
-function depthX(type: TreeNode["type"], depth: number): number {
+function depthX(_type: TreeNode["type"], depth: number): number {
   // d3 depth: 0=root, 1=substation, 2=feeder, 3=dt, 4=first pole, 5+=descendant poles
   const poleDepth = 4
   if (depth < poleDepth) {

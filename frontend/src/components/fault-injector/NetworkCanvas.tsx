@@ -1,6 +1,7 @@
 import { useRef, useEffect, useLayoutEffect, useCallback, useState } from "react"
 import type { PositionedNode, PositionedLink } from "@/lib/treeLayout"
 import type { PoleState, TelemetryEvent } from "@/hooks/useSimulatorEvents"
+import type { Fault } from "@/api/simulator"
 
 export interface CanvasSelection {
   type: "node" | "edge"
@@ -24,6 +25,7 @@ interface NetworkCanvasProps {
   onTransformChange: (t: { x: number; y: number; k: number }) => void
   poleStates?: Map<string, PoleState>
   lastEvent?: TelemetryEvent | null
+  activeFaults?: Fault[]
 }
 
 // ── Layout constants (must match treeLayout.ts) ──
@@ -332,6 +334,43 @@ function isSelected(selection: CanvasSelection[], type: "node" | "edge", id: str
   return selection.some((s) => s.type === type && s.id === id)
 }
 
+function drawFaultMarker(
+  ctx: CanvasRenderingContext2D,
+  faultTarget: string,
+  links: PositionedLink[],
+) {
+  // faultTarget format: "P-1->P-2" for span, or "D-123" for DT, or "F-001" for feeder
+  if (!faultTarget.includes("->")) return // DT/feeder faults don't have a single edge to mark
+
+  const [sourceId, targetId] = faultTarget.split("->")
+
+  // Find the link in the current links
+  const link = links.find((l) => l.sourceId === sourceId && l.targetId === targetId)
+  if (!link) return
+
+  const midX = (link.x1 + link.x2) / 2
+  const midY = (link.y1 + link.y2) / 2
+
+  // Draw red X marker
+  const size = 8
+  ctx.beginPath()
+  ctx.moveTo(midX - size, midY - size)
+  ctx.lineTo(midX + size, midY + size)
+  ctx.moveTo(midX + size, midY - size)
+  ctx.lineTo(midX - size, midY + size)
+  ctx.strokeStyle = "#ef4444"
+  ctx.lineWidth = 2.5
+  ctx.stroke()
+
+  // Also highlight the edge
+  ctx.beginPath()
+  ctx.moveTo(link.x1, link.y1)
+  ctx.lineTo(link.x2, link.y2)
+  ctx.strokeStyle = "#ef4444"
+  ctx.lineWidth = 3
+  ctx.stroke()
+}
+
 // ── Component ──
 
 export function NetworkCanvas({
@@ -344,6 +383,7 @@ export function NetworkCanvas({
   onTransformChange,
   poleStates,
   lastEvent,
+  activeFaults,
 }: NetworkCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -354,6 +394,7 @@ export function NetworkCanvas({
   const linksRef = useRef(links)
   const selectionRef = useRef(selection)
   const poleStatesRef = useRef(poleStates)
+  const activeFaultsRef = useRef(activeFaults)
   const nodeIndexRef = useRef(new Map<string, PositionedNode>())
   const activePulsesRef = useRef<ActivePulse[]>([])
   const rafIdRef = useRef<number | null>(null)
@@ -361,6 +402,9 @@ export function NetworkCanvas({
   const [dragging, setDragging] = useState(false)
   const dragRef = useRef({ startX: 0, startY: 0, startTx: 0, startTy: 0 })
   const hasAutoFitRef = useRef(transform !== null)
+
+  // Keep refs updated
+  useEffect(() => { activeFaultsRef.current = activeFaults }, [activeFaults])
 
   // ── Canvas render (imperative, reads from refs) ──
 
@@ -384,6 +428,14 @@ export function NetworkCanvas({
     for (const link of linksRef.current) {
       if (link.sourceId === "__root__" || link.targetId === "__root__") continue
       drawEdge(ctx, link, isSelected(selectionRef.current, "edge", `${link.sourceId}->${link.targetId}`))
+    }
+
+    // Draw fault markers on faulted edges
+    const faults = activeFaultsRef.current
+    if (faults) {
+      for (const fault of faults) {
+        drawFaultMarker(ctx, fault.target, linksRef.current)
+      }
     }
 
     for (const node of nodesRef.current) {
