@@ -40,16 +40,40 @@ func main() {
 	log.Printf("[api] loaded topology: %d poles, %d transformers, %d feeders",
 		len(topo.PoleByID), len(topo.TransformerByID), len(topo.FeederByID))
 
+	// Fetch clock multiplier from simulator to convert detection window from sim time to wall time
+	multiplier := fetchClockMultiplier(cfg.simulatorURL)
+	log.Printf("[api] simulator clock multiplier: %.1fx", multiplier)
+
 	engine := detect.NewEngine(topo)
 	engine.Start()
 
-	ingestCfg := ingestor.DefaultConfig()
+	// Detection window: 60 simulator seconds -> wall clock seconds
+	detectionWindowWallSecs := int(float64(60) / multiplier)
+	if detectionWindowWallSecs < 1 {
+		detectionWindowWallSecs = 1
+	}
+	log.Printf("[api] detection window: 60 sim seconds = %d wall seconds (at %.1fx)", detectionWindowWallSecs, multiplier)
+
+	ingestCfg := ingestor.Config{
+		DetectionWindowSecs: detectionWindowWallSecs,
+	}
 	ing := ingestor.NewIngestor(topo, engine.JobChannel(), ingestCfg)
 	ing.StartStatsLogger()
 
+	mux := http.NewServeMux()
+	
+	// API routes only - nginx handles proxying to simulator and static files
+	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
+	mux.HandleFunc("POST /ingest", handleIngest(ing, engine))
+	mux.HandleFunc("GET /tickets", handleGetTickets(engine))
+	mux.HandleFunc("PATCH /tickets/", handlePatchTicket(engine))
+	mux.HandleFunc("GET /tickets/stream", handleTicketsStream(engine))
+	mux.HandleFunc("GET /network/inferred-topology", handleInferredTopology(topo))
+	mux.HandleFunc("GET /stats", handleStats(ing, topo))
+
 	srv := &http.Server{
 		Addr:    cfg.addr(),
-		Handler: routes(cfg, ing, engine, topo),
+		Handler: mux,
 	}
 
 	ch := make(chan os.Signal, 1)
@@ -69,6 +93,28 @@ func main() {
 	log.Println("api stopped")
 }
 
+func fetchClockMultiplier(simulatorURL string) float64 {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(simulatorURL + "/clock")
+	if err != nil {
+		log.Printf("[api] failed to fetch clock from simulator: %v, using default 30x", err)
+		return 30.0
+	}
+	defer resp.Body.Close()
+
+	var clock struct {
+		Multiplier float64 `json:"multiplier"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&clock); err != nil {
+		log.Printf("[api] failed to decode clock response: %v, using default 30x", err)
+		return 30.0
+	}
+	if clock.Multiplier <= 0 {
+		return 30.0
+	}
+	return clock.Multiplier
+}
+
 type apiConfig struct {
 	port         string
 	databaseURL  string
@@ -79,7 +125,7 @@ func readConfig() apiConfig {
 	return apiConfig{
 		port:         env("API_PORT", "8080"),
 		databaseURL:  os.Getenv("DATABASE_URL"),
-		simulatorURL: env("SIMULATOR_URL", "http://localhost:8081"),
+		simulatorURL: env("SIMULATOR_URL", "http://simulator:8081"),
 	}
 }
 
@@ -92,52 +138,6 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func routes(cfg apiConfig, ing *ingestor.Ingestor, engine *detect.Engine, topo *detect.TopologyIndex) *http.ServeMux {
-	mux := http.NewServeMux()
-	
-	// API routes
-	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
-	mux.HandleFunc("POST /ingest", handleIngest(ing, engine))
-	mux.HandleFunc("GET /tickets", handleGetTickets(engine))
-	mux.HandleFunc("PATCH /tickets/", handlePatchTicket(engine))
-	mux.HandleFunc("GET /tickets/stream", handleTicketsStream(engine))
-	mux.HandleFunc("GET /network/inferred-topology", handleInferredTopology(topo))
-	mux.HandleFunc("GET /stats", handleStats(ing, topo))
-	
-	// Static file serving for frontend (SPA)
-	// Serve index.html for all non-API routes to support client-side routing
-	fs := http.FileServer(http.Dir("./static"))
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		// Skip API routes
-		if r.URL.Path != "/" && 
-		   !isStaticFile(r.URL.Path) &&
-		   !strings.HasPrefix(r.URL.Path, "/api/") &&
-		   !strings.HasPrefix(r.URL.Path, "/healthz") &&
-		   !strings.HasPrefix(r.URL.Path, "/ingest") &&
-		   !strings.HasPrefix(r.URL.Path, "/tickets") &&
-		   !strings.HasPrefix(r.URL.Path, "/network/") &&
-		   !strings.HasPrefix(r.URL.Path, "/stats") {
-			// Serve index.html for SPA routing
-			http.ServeFile(w, r, "./static/index.html")
-			return
-		}
-		// Serve static files
-		fs.ServeHTTP(w, r)
-	})
-	
-	return mux
-}
-
-func isStaticFile(path string) bool {
-	staticExtensions := []string{".js", ".css", ".ico", ".png", ".jpg", ".svg", ".woff", ".woff2", ".ttf", ".map"}
-	for _, ext := range staticExtensions {
-		if strings.HasSuffix(path, ext) {
-			return true
-		}
-	}
-	return false
 }
 
 func handleIngest(ing *ingestor.Ingestor, engine *detect.Engine) http.HandlerFunc {

@@ -1,6 +1,6 @@
 # Decisions
 
-## 2026-08-06 — Dashboard + Map + Geographic Inference
+## 2026-08-05 — Dashboard + Map + Geographic Inference
 
 Added the Operations Dashboard and Geographic Map pages to complete the operator UI:
 
