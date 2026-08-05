@@ -153,11 +153,7 @@ func (s *Server) handleTopologyTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListFaults(w http.ResponseWriter, r *http.Request) {
-	s.te.ListFaults()
-	faults := make([]*Fault, 0, len(s.st.ActiveFaults))
-	for _, f := range s.st.ActiveFaults {
-		faults = append(faults, f)
-	}
+	faults := s.te.ListFaults()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(faults)
 }
@@ -176,6 +172,10 @@ func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fault := s.te.InjectFault(req.ParentID, req.ChildID)
+	if fault == nil {
+		http.Error(w, "invalid fault target: parent->child not an edge in ground-truth topology", http.StatusBadRequest)
+		return
+	}
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(fault)
 }
@@ -183,7 +183,7 @@ func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRepairFault(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.te.RepairFault(id); err != nil {
-		http.Error(w, "fault not found", http.StatusNotFound)
+		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

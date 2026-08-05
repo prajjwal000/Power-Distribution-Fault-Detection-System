@@ -54,10 +54,12 @@ type SimulatorState struct {
 }
 
 type Fault struct {
-	ID          string
-	Span        string
-	AffectedSet []string
-	StartSim    int64
+	ID          string   `json:"id"`
+	Type        string   `json:"type"`         // "span", "dt", "feeder"
+	Target      string   `json:"target"`       // "P-1->P-2" or "D-123" or "F-001"
+	AffectedSet []string `json:"affected_poles"`
+	Affected    int      `json:"affected_count"`
+	StartSim    int64    `json:"start_sim"`
 }
 
 func NewSimulatorState() *SimulatorState {

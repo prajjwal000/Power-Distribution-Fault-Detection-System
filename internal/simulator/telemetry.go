@@ -2,7 +2,9 @@ package simulator
 
 import (
 	"container/heap"
+	"fmt"
 	"math/rand"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -44,17 +46,18 @@ func (h *deviceHeap) Pop() any {
 }
 
 type TelemetryEngine struct {
-	st    *SimulatorState
-	clock *Clock
-	emit  TelemetryEmitter
-	queue *DeliveryQueue
-	rng   *rand.Rand // guarded by mu
+	st         *SimulatorState
+	clock      *Clock
+	emit       TelemetryEmitter
+	queue      *DeliveryQueue
+	rng        *rand.Rand // guarded by mu
 
-	jobs   chan TelemetryEvent
-	stopCh chan struct{}
+	jobs       chan TelemetryEvent
+	stopCh     chan struct{}
+	faultSeq   int         // guarded by mu
 
-	schedWg  sync.WaitGroup // run + dispatch
-	workerWg sync.WaitGroup // delivery workers
+	schedWg    sync.WaitGroup // run + dispatch
+	workerWg   sync.WaitGroup // delivery workers
 
 	mu sync.Mutex
 }
@@ -212,12 +215,19 @@ func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
 	defer te.mu.Unlock()
 
 	simNow := te.clock.NowSim()
+	// Validate that parent->child is a real edge in GT topology
+	if te.st.Parents[childID] != parentID {
+		return nil // validation error, handled by server
+	}
 	affected := te.st.AffectedPolesForSpan(childID)
 
+	te.faultSeq++
 	fault := &Fault{
-		ID:          "fault-" + childID,
-		Span:        parentID + "->" + childID,
+		ID:          "fault-" + strconv.FormatInt(int64(te.faultSeq), 10),
+		Type:        "span",
+		Target:      parentID + "->" + childID,
 		AffectedSet: affected,
+		Affected:    len(affected),
 		StartSim:    simNow,
 	}
 	te.st.ActiveFaults[fault.ID] = fault
@@ -275,9 +285,9 @@ func (te *TelemetryEngine) RepairFault(faultID string) error {
 
 	fault, ok := te.st.ActiveFaults[faultID]
 	if !ok {
-		return nil
+		return fmt.Errorf("fault %s not found", faultID)
 	}
-	te.repairDevices(fault.AffectedSet)
+	te.repairDevices(fault.AffectedSet, faultID)
 	delete(te.st.ActiveFaults, faultID)
 	return nil
 }
@@ -291,13 +301,27 @@ func (te *TelemetryEngine) RepairAll() {
 		allPoles = append(allPoles, f.AffectedSet...)
 	}
 	te.st.ActiveFaults = make(map[string]*Fault)
-	te.repairDevices(allPoles)
+	te.repairDevices(allPoles, "")
 }
 
-func (te *TelemetryEngine) repairDevices(poleIDs []string) {
+func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string) {
 	simNow := te.clock.NowSim()
 
+	// Determine which poles are still covered by other active faults.
+	stillDark := make(map[string]bool)
+	for _, f := range te.st.ActiveFaults {
+		if f.ID == excludeFaultID {
+			continue
+		}
+		for _, p := range f.AffectedSet {
+			stillDark[p] = true
+		}
+	}
+
 	for _, poleID := range poleIDs {
+		if stillDark[poleID] {
+			continue // still dark due to another fault
+		}
 		pole := te.st.PoleByID[poleID]
 		if pole == nil || pole.DeviceID == nil {
 			continue
