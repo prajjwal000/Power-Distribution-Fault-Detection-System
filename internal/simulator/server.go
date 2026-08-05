@@ -160,20 +160,48 @@ func (s *Server) handleListFaults(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
 	var req struct {
+		Type     string `json:"type"`
 		ParentID string `json:"parent_id"`
 		ChildID  string `json:"child_id"`
+		TargetID string `json:"target_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.ParentID == "" || req.ChildID == "" {
-		http.Error(w, "parent_id and child_id are required", http.StatusBadRequest)
+
+	if req.Type == "" {
+		http.Error(w, "type is required (span|dt|feeder)", http.StatusBadRequest)
 		return
 	}
-	fault := s.te.InjectFault(req.ParentID, req.ChildID)
+
+	var fault *Fault
+	switch req.Type {
+	case "span":
+		if req.ParentID == "" || req.ChildID == "" {
+			http.Error(w, "span fault requires parent_id and child_id", http.StatusBadRequest)
+			return
+		}
+		fault = s.te.InjectFault(req.ParentID, req.ChildID)
+	case "dt":
+		if req.TargetID == "" {
+			http.Error(w, "dt fault requires target_id", http.StatusBadRequest)
+			return
+		}
+		fault = s.te.InjectDT(req.TargetID)
+	case "feeder":
+		if req.TargetID == "" {
+			http.Error(w, "feeder fault requires target_id", http.StatusBadRequest)
+			return
+		}
+		fault = s.te.InjectFeeder(req.TargetID)
+	default:
+		http.Error(w, "unknown fault type: "+req.Type, http.StatusBadRequest)
+		return
+	}
+
 	if fault == nil {
-		http.Error(w, "invalid fault target: parent->child not an edge in ground-truth topology", http.StatusBadRequest)
+		http.Error(w, "invalid fault target", http.StatusBadRequest)
 		return
 	}
 	w.WriteHeader(http.StatusCreated)

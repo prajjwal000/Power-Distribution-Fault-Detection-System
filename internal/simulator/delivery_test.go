@@ -18,6 +18,8 @@ func buildLineState() *SimulatorState {
 	st.Children["P-4"] = []string{}
 	st.Parents["P-2"] = "P-1"
 	st.Parents["P-4"] = "P-2"
+	st.TransformerByID = make(map[string]*model.Transformer)
+	st.FeederByID = make(map[string]*model.Feeder)
 
 	st.PoleByID["P-1"] = &model.Pole{ID: "P-1", DeviceID: strp("D-1")}
 	st.PoleByID["P-2"] = &model.Pole{ID: "P-2", DeviceID: strp("D-2")}

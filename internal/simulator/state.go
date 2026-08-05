@@ -41,16 +41,18 @@ type TelemetryEvent struct {
 }
 
 type SimulatorState struct {
-	PoleByID     map[string]*model.Pole
-	PoleByDevice map[string]*model.Pole
-	Devices      map[string]*DeviceState
-	Substations  []model.Substation
-	Feeders      []model.Feeder
-	Transformers []model.Transformer
-	GTPoles      []model.GTPole
-	Children     map[string][]string
-	Parents      map[string]string
-	ActiveFaults map[string]*Fault
+	PoleByID         map[string]*model.Pole
+	PoleByDevice     map[string]*model.Pole
+	Devices          map[string]*DeviceState
+	Substations      []model.Substation
+	Feeders          []model.Feeder
+	Transformers     []model.Transformer
+	GTPoles          []model.GTPole
+	Children         map[string][]string
+	Parents          map[string]string
+	TransformerByID  map[string]*model.Transformer
+	FeederByID       map[string]*model.Feeder
+	ActiveFaults     map[string]*Fault
 }
 
 type Fault struct {

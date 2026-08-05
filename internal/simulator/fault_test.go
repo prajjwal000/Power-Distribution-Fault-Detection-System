@@ -1,7 +1,10 @@
 package simulator
 
 import (
+	"math"
 	"testing"
+
+	"power-fault-detector/internal/model"
 )
 
 func TestFaultUniqueIDs(t *testing.T) {
@@ -143,5 +146,99 @@ func TestInjectFaultOnAlreadyDarkDoesNotReemit(t *testing.T) {
 	// Actually, P-4 is affected, D-4 is fw 1.2 -> no emit. So queue stays at 1.
 	if got := te.queue.Len(); got != 1 {
 		t.Errorf("queue len = %d, want 1", got)
+	}
+}
+
+func TestInjectDT(t *testing.T) {
+	old := powerLostDeliveryRate
+	powerLostDeliveryRate = 1.0
+	defer func() { powerLostDeliveryRate = old }()
+
+	st := buildLineState()
+	// Add a transformer ID to the state
+	st.TransformerByID["D-123"] = &model.Transformer{ID: "D-123", FeederID: "F-1"}
+	// Add some poles under this DT
+	d5 := "D-5"
+	st.PoleByID["P-5"] = &model.Pole{ID: "P-5", DTID: "D-123", DeviceID: &d5}
+	st.Devices["D-5"] = &DeviceState{DeviceID: "D-5", PoleID: "P-5", Firmware: "1.4.2", Energized: true, RadioDelaySecs: 5}
+
+	clock := NewClock(30)
+	te := NewTelemetryEngine(st, clock, func(TelemetryEvent) {})
+
+	// Inject DT fault
+	fault := te.InjectDT("D-123")
+	if fault == nil {
+		t.Fatal("InjectDT returned nil")
+	}
+	if fault.Type != "dt" || fault.Target != "D-123" {
+		t.Errorf("fault = %+v, want type=dt target=D-123", fault)
+	}
+	if fault.Affected != 1 {
+		t.Errorf("affected count = %d, want 1", fault.Affected)
+	}
+	// Queue should have 1 event (D-5 emits)
+	if got := te.queue.Len(); got != 1 {
+		t.Errorf("queue len = %d, want 1", got)
+	}
+	due := te.queue.Due(math.MaxInt64)
+	if len(due) != 1 || due[0].PoleID != "P-5" {
+		t.Errorf("due event = %+v, want P-5 power_lost", due)
+	}
+}
+
+func TestInjectFeeder(t *testing.T) {
+	old := powerLostDeliveryRate
+	powerLostDeliveryRate = 1.0
+	defer func() { powerLostDeliveryRate = old }()
+
+	st := buildLineState()
+	// Add a feeder ID
+	st.FeederByID["F-99"] = &model.Feeder{ID: "F-99"}
+	// Add poles under this feeder
+	d6 := "D-6"
+	st.PoleByID["P-6"] = &model.Pole{ID: "P-6", DTID: "D-123", FeederID: "F-99", DeviceID: &d6}
+	st.Devices["D-6"] = &DeviceState{DeviceID: "D-6", PoleID: "P-6", Firmware: "1.4.2", Energized: true, RadioDelaySecs: 3}
+
+	clock := NewClock(30)
+	te := NewTelemetryEngine(st, clock, func(TelemetryEvent) {})
+
+	fault := te.InjectFeeder("F-99")
+	if fault == nil {
+		t.Fatal("InjectFeeder returned nil")
+	}
+	if fault.Type != "feeder" || fault.Target != "F-99" {
+		t.Errorf("fault = %+v, want type=feeder target=F-99", fault)
+	}
+	if fault.Affected != 1 {
+		t.Errorf("affected count = %d, want 1", fault.Affected)
+	}
+	if got := te.queue.Len(); got != 1 {
+		t.Errorf("queue len = %d, want 1", got)
+	}
+	due := te.queue.Due(math.MaxInt64)
+	if len(due) != 1 || due[0].PoleID != "P-6" {
+		t.Errorf("due event = %+v, want P-6 power_lost", due)
+	}
+}
+
+func TestInjectDTUnknownReturnsNil(t *testing.T) {
+	st := buildLineState()
+	clock := NewClock(30)
+	te := NewTelemetryEngine(st, clock, func(TelemetryEvent) {})
+
+	fault := te.InjectDT("unknown-dt")
+	if fault != nil {
+		t.Errorf("InjectDT unknown should return nil, got %+v", fault)
+	}
+}
+
+func TestInjectFeederUnknownReturnsNil(t *testing.T) {
+	st := buildLineState()
+	clock := NewClock(30)
+	te := NewTelemetryEngine(st, clock, func(TelemetryEvent) {})
+
+	fault := te.InjectFeeder("unknown-feeder")
+	if fault != nil {
+		t.Errorf("InjectFeeder unknown should return nil, got %+v", fault)
 	}
 }

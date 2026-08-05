@@ -210,22 +210,16 @@ func (te *TelemetryEngine) willEmitPowerLost(dev *DeviceState) bool {
 	return te.rng.Float64() < powerLostDeliveryRate
 }
 
-func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
-	te.mu.Lock()
-	defer te.mu.Unlock()
-
+// injectFaultCommon does the shared work of darkening affected poles and
+// queuing power_lost events. Caller must hold mu.
+func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected []string) *Fault {
 	simNow := te.clock.NowSim()
-	// Validate that parent->child is a real edge in GT topology
-	if te.st.Parents[childID] != parentID {
-		return nil // validation error, handled by server
-	}
-	affected := te.st.AffectedPolesForSpan(childID)
 
 	te.faultSeq++
 	fault := &Fault{
 		ID:          "fault-" + strconv.FormatInt(int64(te.faultSeq), 10),
-		Type:        "span",
-		Target:      parentID + "->" + childID,
+		Type:        faultType,
+		Target:      target,
 		AffectedSet: affected,
 		Affected:    len(affected),
 		StartSim:    simNow,
@@ -267,6 +261,41 @@ func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
 	}
 
 	return fault
+}
+
+func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	if te.st.Parents[childID] != parentID {
+		return nil
+	}
+	affected := te.st.AffectedPolesForSpan(childID)
+	return te.injectFaultCommon("span", parentID+"->"+childID, affected)
+}
+
+func (te *TelemetryEngine) InjectDT(dtID string) *Fault {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	// Validate DT exists
+	if _, ok := te.st.TransformerByID[dtID]; !ok {
+		return nil
+	}
+	affected := te.st.AffectedPolesForDT(dtID)
+	return te.injectFaultCommon("dt", dtID, affected)
+}
+
+func (te *TelemetryEngine) InjectFeeder(feederID string) *Fault {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	// Validate feeder exists
+	if _, ok := te.st.FeederByID[feederID]; !ok {
+		return nil
+	}
+	affected := te.st.AffectedPolesForFeeder(feederID)
+	return te.injectFaultCommon("feeder", feederID, affected)
 }
 
 func (te *TelemetryEngine) ListFaults() []*Fault {

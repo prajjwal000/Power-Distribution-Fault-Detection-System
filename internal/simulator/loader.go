@@ -47,6 +47,14 @@ func (st *SimulatorState) BuildIndices() {
 			st.PoleByDevice[*p.DeviceID] = p
 		}
 	}
+	st.TransformerByID = make(map[string]*model.Transformer, len(st.Transformers))
+	for i := range st.Transformers {
+		st.TransformerByID[st.Transformers[i].ID] = &st.Transformers[i]
+	}
+	st.FeederByID = make(map[string]*model.Feeder, len(st.Feeders))
+	for i := range st.Feeders {
+		st.FeederByID[st.Feeders[i].ID] = &st.Feeders[i]
+	}
 }
 
 func seedDevices(st *SimulatorState) {
