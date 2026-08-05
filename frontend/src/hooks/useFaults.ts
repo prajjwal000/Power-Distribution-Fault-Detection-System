@@ -11,8 +11,6 @@ export interface FaultState {
   refresh: () => Promise<void>
 }
 
-const POLL_INTERVAL_MS = 2000
-
 export function useFaults(): FaultState {
   const [faults, setFaults] = useState<Fault[]>([])
   const [loading, setLoading] = useState(false)
@@ -33,8 +31,6 @@ export function useFaults(): FaultState {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh()
-    const id = setInterval(() => void refresh(), POLL_INTERVAL_MS)
-    return () => clearInterval(id)
   }, [refresh])
 
   const doInjectFault = useCallback(async (target: FaultTarget) => {
