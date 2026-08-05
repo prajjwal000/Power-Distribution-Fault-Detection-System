@@ -27,6 +27,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sim/faults", s.handleInjectFault)
 	mux.HandleFunc("POST /sim/faults/{id}", s.handleRepairFault)
 	mux.HandleFunc("POST /sim/faults/repair", s.handleRepairAll)
+	mux.HandleFunc("POST /sim/noise", s.handleInjectNoise)
+	mux.HandleFunc("GET /scheduled-outages", s.handleScheduledOutages)
 	mux.HandleFunc("GET /sim/events/stream", s.handleEventsStream)
 }
 
@@ -220,6 +222,139 @@ func (s *Server) handleRepairFault(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRepairAll(w http.ResponseWriter, r *http.Request) {
 	s.te.RepairAll()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleInjectNoise(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind     string `json:"kind"`      // device_death | duplicate | stale_replay
+		DeviceID string `json:"device_id"` // optional: specific device, or random if empty
+		Count    int    `json:"count"`     // optional: number of devices/events
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Count <= 0 {
+		req.Count = 1
+	}
+
+	var err error
+	switch req.Kind {
+	case "device_death":
+		err = s.te.InjectDeviceDeath(req.DeviceID, req.Count)
+	case "duplicate":
+		err = s.te.InjectDuplicateEvent(req.DeviceID, req.Count)
+	case "stale_replay":
+		err = s.te.InjectStaleReplay(req.DeviceID, req.Count)
+	default:
+		http.Error(w, "unknown noise kind: "+req.Kind, http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleScheduledOutages(w http.ResponseWriter, r *http.Request) {
+	from := r.URL.Query().Get("from")
+	to := r.URL.Query().Get("to")
+	if from == "" || to == "" {
+		http.Error(w, "from and to query parameters required", http.StatusBadRequest)
+		return
+	}
+
+	fromTime, err := time.Parse(time.RFC3339, from)
+	if err != nil {
+		http.Error(w, "invalid from time: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	toTime, err := time.Parse(time.RFC3339, to)
+	if err != nil {
+		http.Error(w, "invalid to time: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Generate deterministic mock outages based on the time range
+	// In a real system this would come from a database
+	outages := s.generateMockOutages(fromTime, toTime)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(outages)
+}
+
+func (s *Server) generateMockOutages(from, to time.Time) []ScheduledOutage {
+	var outages []ScheduledOutage
+	// Deterministic: use feeder/DT IDs from state, hash the time range
+	// to decide which outages exist in this window
+
+	// For demo: create 2-3 outages per day in the range
+	days := int(to.Sub(from).Hours() / 24)
+	if days < 1 {
+		days = 1
+	}
+
+	for d := 0; d < days; d++ {
+		dayStart := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, d)
+
+		// Feeder outage ~1 per day
+		if len(s.st.Feeders) > 0 {
+			feeder := s.st.Feeders[d%len(s.st.Feeders)]
+			start := dayStart.Add(time.Duration(10+d*7)*time.Hour + time.Duration(d*13)*time.Minute)
+			end := start.Add(time.Duration(2+d*3)*time.Hour)
+			if start.Before(to) && end.After(from) {
+				// 1 in 10 is "cancelled" (don't include)
+				feederHash := int(feeder.ID[0]) + int(feeder.ID[len(feeder.ID)-1])
+				if (d*7+feederHash)%10 != 0 {
+					// 20-40 min overrun
+					overrun := time.Duration(20 + (d*11)%21) * time.Minute
+					outages = append(outages, ScheduledOutage{
+						ID:      fmt.Sprintf("SO-%s-%03d", dayStart.Format("2006-01-02"), d*10+feederHash),
+						Scope:   "feeder",
+						TargetID: feeder.ID,
+						Start:   start.Format(time.RFC3339),
+						End:     end.Add(overrun).Format(time.RFC3339),
+						Reason:  "Planned maintenance",
+					})
+				}
+			}
+		}
+
+		// DT outage ~1 per day
+		if len(s.st.Transformers) > 0 {
+			dt := s.st.Transformers[d%len(s.st.Transformers)]
+			start := dayStart.Add(time.Duration(14+d*5)*time.Hour)
+			end := start.Add(time.Duration(1+d)*time.Hour)
+			if start.Before(to) && end.After(from) {
+				dtHash := int(dt.ID[0]) + int(dt.ID[len(dt.ID)-1])
+				if (d*5+dtHash)%10 != 0 {
+					overrun := time.Duration(20 + (d*7)%21) * time.Minute
+					outages = append(outages, ScheduledOutage{
+						ID:      fmt.Sprintf("SO-%s-%03d", dayStart.Format("2006-01-02"), d*10+dtHash+100),
+						Scope:   "dt",
+						TargetID: dt.ID,
+						Start:   start.Format(time.RFC3339),
+						End:     end.Add(overrun).Format(time.RFC3339),
+						Reason:  "Load shedding",
+					})
+				}
+			}
+		}
+	}
+
+	return outages
+}
+
+// ScheduledOutage represents a planned outage from the mock feed.
+type ScheduledOutage struct {
+	ID        string `json:"id"`
+	Scope     string `json:"scope"`     // feeder | dt
+	TargetID  string `json:"target_id"`
+	Start     string `json:"start"`
+	End       string `json:"end"`
+	Reason    string `json:"reason"`
 }
 
 func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {

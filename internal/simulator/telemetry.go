@@ -378,7 +378,9 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 		})
 
 		dev.Seq++
-		restoreSim := simNow + 1
+		// Per spec: "typically within 20 seconds" — stagger restoration across devices
+		stagger := int64(rand.Float64() * 20)
+		restoreSim := simNow + 1 + stagger
 		te.queue.Schedule(restoreSim+dev.RadioDelaySecs, TelemetryEvent{
 			DeviceID:  dev.DeviceID,
 			PoleID:    dev.PoleID,
@@ -395,4 +397,123 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 		jitter := int64(HeartbeatJitterSecs * 2 * rand.Float64())
 		dev.NextEmitSim = simNow + int64(HeartbeatIntervalSecs) - int64(HeartbeatJitterSecs) + jitter
 	}
+}
+
+// InjectDeviceDeath makes `count` devices stop heartbeating (simulates a dead modem
+// while power is still on). If deviceID is specified, targets that device;
+// otherwise picks random energized devices. The device stays energized but its
+// NextEmitSim is set to 0 so it won't send heartbeats.
+func (te *TelemetryEngine) InjectDeviceDeath(deviceID string, count int) error {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	var targets []*DeviceState
+	if deviceID != "" {
+		if dev, ok := te.st.Devices[deviceID]; ok && dev.Energized {
+			targets = append(targets, dev)
+		}
+	} else {
+		for _, dev := range te.st.Devices {
+			if dev.Energized && dev.NextEmitSim > 0 {
+				targets = append(targets, dev)
+			}
+		}
+	}
+
+	if len(targets) == 0 {
+		return fmt.Errorf("no energized devices available")
+	}
+
+	for i := 0; i < count && i < len(targets); i++ {
+		dev := targets[i]
+		dev.NextEmitSim = 0 // stop heartbeating
+	}
+	return nil
+}
+
+// InjectDuplicateEvent re-emits a recent event from the specified device (or a
+// random one) with the same seq, simulating at-least-once delivery.
+func (te *TelemetryEngine) InjectDuplicateEvent(deviceID string, count int) error {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	var dev *DeviceState
+	if deviceID != "" {
+		var ok bool
+		dev, ok = te.st.Devices[deviceID]
+		if !ok {
+			return fmt.Errorf("device not found: %s", deviceID)
+		}
+	} else {
+		for _, d := range te.st.Devices {
+			if d.Seq > 0 {
+				dev = d
+				break
+			}
+		}
+	}
+
+	if dev == nil || dev.Seq == 0 {
+		return fmt.Errorf("no device with recent events")
+	}
+
+	for i := 0; i < count; i++ {
+		evt := TelemetryEvent{
+			DeviceID:  dev.DeviceID,
+			PoleID:    dev.PoleID,
+			Event:     "heartbeat",
+			Energized: dev.Energized,
+			Ts:        te.clock.TsForSim(te.clock.NowSim(), dev.ClockSkewSecs),
+			Seq:       dev.Seq,
+			BatteryMV: dev.BatteryMV,
+			RSSI:      dev.RSSI,
+			Fw:        dev.Firmware,
+		}
+		te.queue.Schedule(te.clock.NowSim()+dev.RadioDelaySecs, evt)
+	}
+	return nil
+}
+
+// InjectStaleReplay emits an old power_lost event with a stale timestamp and
+// sequence, simulating the 6-hour retry behavior from devices that were offline.
+func (te *TelemetryEngine) InjectStaleReplay(deviceID string, count int) error {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	var dev *DeviceState
+	if deviceID != "" {
+		var ok bool
+		dev, ok = te.st.Devices[deviceID]
+		if !ok {
+			return fmt.Errorf("device not found: %s", deviceID)
+		}
+	} else {
+		for _, d := range te.st.Devices {
+			if !d.Energized {
+				dev = d
+				break
+			}
+		}
+	}
+
+	if dev == nil || dev.Seq == 0 {
+		return fmt.Errorf("no suitable device for stale replay")
+	}
+
+	staleSim := te.clock.NowSim() - 7200
+	for i := 0; i < count; i++ {
+		evt := TelemetryEvent{
+			DeviceID:  dev.DeviceID,
+			PoleID:    dev.PoleID,
+			Event:     "power_lost",
+			Energized: false,
+			Ts:        te.clock.TsForSim(staleSim, dev.ClockSkewSecs),
+			Seq:       dev.Seq,
+			BatteryMV: dev.BatteryMV,
+			RSSI:      dev.RSSI,
+			Fw:        dev.Firmware,
+		}
+		te.queue.Schedule(te.clock.NowSim()+dev.RadioDelaySecs, evt)
+	}
+	return nil
 }
