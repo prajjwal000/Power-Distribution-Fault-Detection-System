@@ -3,70 +3,58 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"power-fault-detector/internal/detect"
+	"power-fault-detector/internal/ingestor"
 )
-
-type ingestStats struct {
-	total uint64
-	byType map[string]uint64
-	mu     sync.Mutex
-}
-
-func (s *ingestStats) record(eventType string) {
-	atomic.AddUint64(&s.total, 1)
-	if eventType != "" {
-		s.mu.Lock()
-		s.byType[eventType]++
-		s.mu.Unlock()
-	}
-}
-
-func (s *ingestStats) snapshot() (uint64, map[string]uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	total := atomic.LoadUint64(&s.total)
-	byType := make(map[string]uint64, len(s.byType))
-	for k, v := range s.byType {
-		byType[k] = v
-	}
-	return total, byType
-}
 
 func main() {
 	cfg := readConfig()
 
-	stats := &ingestStats{byType: make(map[string]uint64)}
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			total, byType := stats.snapshot()
-			if total == 0 {
-				continue
-			}
-			log.Printf("[api] ingest: %d events in 10s %v", total, byType)
-		}
-	}()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, cfg.databaseURL)
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	if err := conn.Ping(ctx); err != nil {
+		log.Fatalf("failed to ping database: %v", err)
+	}
+	log.Println("[api] connected to database")
+
+	topo, err := detect.LoadTopology(ctx, conn)
+	if err != nil {
+		log.Fatalf("failed to load topology: %v", err)
+	}
+	log.Printf("[api] loaded topology: %d poles, %d transformers, %d feeders",
+		len(topo.PoleByID), len(topo.TransformerByID), len(topo.FeederByID))
+
+	engine := detect.NewEngine(topo)
+	engine.Start()
+
+	ingestCfg := ingestor.DefaultConfig()
+	ing := ingestor.NewIngestor(topo, engine.JobChannel(), ingestCfg)
+	ing.StartStatsLogger()
 
 	srv := &http.Server{
 		Addr:    cfg.addr(),
-		Handler: routes(cfg, stats),
+		Handler: routes(cfg, ing, engine, topo),
 	}
 
-	// Graceful shutdown
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-ch
+		engine.Stop()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
@@ -104,28 +92,96 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-// routes builds the service mux. Extracted for testing.
-func routes(cfg apiConfig, stats *ingestStats) *http.ServeMux {
+func routes(cfg apiConfig, ing *ingestor.Ingestor, engine *detect.Engine, topo *detect.TopologyIndex) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
-	mux.HandleFunc("POST /ingest", handleIngest(stats))
+	mux.HandleFunc("POST /ingest", handleIngest(ing, engine))
+	mux.HandleFunc("GET /tickets", handleGetTickets(engine))
+	mux.HandleFunc("GET /tickets/stream", handleTicketsStream(engine))
+	mux.HandleFunc("GET /stats", handleStats(ing, topo))
 	return mux
 }
 
-func handleIngest(stats *ingestStats) http.HandlerFunc {
+func handleIngest(ing *ingestor.Ingestor, engine *detect.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var event map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+		var ev ingestor.TelemetryEvent
+		if err := json.NewDecoder(r.Body).Decode(&ev); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 
-		if evt, ok := event["event"].(string); ok {
-			stats.record(evt)
+		if ev.DeviceID == "" {
+			http.Error(w, "missing device_id", http.StatusBadRequest)
+			return
+		}
+
+		ing.ProcessEvent(ev)
+
+		if ev.Event == "boot" || ev.Event == "power_restored" {
+			pole, ok := ing.GetTopology().DeviceToPole[ev.DeviceID]
+			if ok {
+				engine.HandleRestoration(ev.DeviceID, pole.ID, pole.DTID)
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}
+}
+
+func handleGetTickets(engine *detect.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tickets := engine.GetTickets()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tickets)
+	}
+}
+
+func handleTicketsStream(engine *detect.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		ch := engine.Broadcaster().Subscribe()
+		defer engine.Broadcaster().Unsubscribe(ch)
+
+		ctx := r.Context()
+		for {
+			select {
+			case update, ok := <-ch:
+				if !ok {
+					return
+				}
+				data, _ := json.Marshal(update)
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func handleStats(ing *ingestor.Ingestor, topo *detect.TopologyIndex) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stats := ing.GetStats()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ingest": stats,
+			"topology": map[string]int{
+				"poles":        len(topo.PoleByID),
+				"transformers": len(topo.TransformerByID),
+				"feeders":      len(topo.FeederByID),
+			},
+		})
 	}
 }
 
