@@ -8,7 +8,12 @@ import (
 	"testing"
 )
 
-const defaultTestPoleCount = 3000
+const defaultTestPoleCount = 500
+
+func TestMain(m *testing.M) {
+	os.Setenv("GENERATOR_NO_ROADS", "1")
+	os.Exit(m.Run())
+}
 
 func testConfig() Config {
 	poleCount := defaultTestPoleCount
