@@ -22,6 +22,8 @@ type Pole struct {
 type Transformer struct {
 	ID               string
 	FeederID         string
+	Lat              float64
+	Lon              float64
 	CapacityKVA      int
 	HouseholdsServed int
 }
@@ -93,7 +95,7 @@ func (idx *TopologyIndex) loadFeeders(ctx context.Context, conn *pgx.Conn) error
 }
 
 func (idx *TopologyIndex) loadTransformers(ctx context.Context, conn *pgx.Conn) error {
-	rows, err := conn.Query(ctx, "SELECT id, feeder_id, capacity_kva, households_served FROM transformers")
+	rows, err := conn.Query(ctx, "SELECT id, feeder_id, lat, lon, capacity_kva, households_served FROM transformers")
 	if err != nil {
 		return err
 	}
@@ -101,7 +103,7 @@ func (idx *TopologyIndex) loadTransformers(ctx context.Context, conn *pgx.Conn) 
 
 	for rows.Next() {
 		var t Transformer
-		if err := rows.Scan(&t.ID, &t.FeederID, &t.CapacityKVA, &t.HouseholdsServed); err != nil {
+		if err := rows.Scan(&t.ID, &t.FeederID, &t.Lat, &t.Lon, &t.CapacityKVA, &t.HouseholdsServed); err != nil {
 			return err
 		}
 		idx.TransformerByID[t.ID] = &t

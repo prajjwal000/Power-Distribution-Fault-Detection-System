@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"os/signal"
@@ -275,11 +276,24 @@ func handleInferredTopology(topo *detect.TopologyIndex) http.HandlerFunc {
 			return
 		}
 
+		inferred := detect.InferTopologyForDT(dtID, topo)
+
+		edges := make([]map[string]any, len(inferred.Edges))
+		for i, e := range inferred.Edges {
+			edges[i] = map[string]any{
+				"parent_id":  e.ParentID,
+				"child_id":   e.ChildID,
+				"distance_m": math.Round(e.Distance*100) / 100,
+				"confidence": math.Round(e.Confidence*100) / 100,
+				"method":     e.Method,
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"dt_id":  dtID,
-			"edges":  []any{},
-			"method": "mst_radial",
+			"edges":  edges,
+			"method": inferred.Method,
 		})
 	}
 }
