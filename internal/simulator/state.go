@@ -33,6 +33,7 @@ type TelemetryEvent struct {
 	PoleID    string `json:"pole_id"`
 	Event     string `json:"event"`
 	Energized bool   `json:"energized"`
+	Reported  bool   `json:"reported"`
 	Ts        string `json:"ts"`
 	Seq       int64  `json:"seq"`
 	BatteryMV int    `json:"battery_mv"`

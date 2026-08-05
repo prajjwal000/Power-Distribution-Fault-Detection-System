@@ -203,6 +203,15 @@ func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fault == nil {
+		// Could be invalid target or duplicate — check for existing fault
+		for _, f := range s.te.ListFaults() {
+			if (req.Type == "span" && f.Target == req.ParentID+"->"+req.ChildID) ||
+				(req.Type == "dt" && f.Target == req.TargetID) ||
+				(req.Type == "feeder" && f.Target == req.TargetID) {
+				http.Error(w, "fault already active on this target", http.StatusConflict)
+				return
+			}
+		}
 		http.Error(w, "invalid fault target", http.StatusBadRequest)
 		return
 	}

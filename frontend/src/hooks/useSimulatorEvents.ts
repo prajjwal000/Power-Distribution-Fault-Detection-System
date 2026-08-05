@@ -5,6 +5,7 @@ export interface TelemetryEvent {
   pole_id: string
   event: "heartbeat" | "power_lost" | "power_restored" | "boot"
   energized: boolean
+  reported: boolean
   ts: string
   seq: number
   battery_mv: number
@@ -14,6 +15,7 @@ export interface TelemetryEvent {
 
 export interface PoleState {
   energized: boolean
+  reported: boolean
   lastEvent: TelemetryEvent["event"]
   lastEventTime: number
   lastEventSeq: number
@@ -22,7 +24,7 @@ export interface PoleState {
 export interface SimEventsState {
   poleStates: Map<string, PoleState>
   connected: boolean
-  lastEvent: TelemetryEvent | null
+  lastEvents: TelemetryEvent[]
 }
 
 const BATCH_INTERVAL_MS = 100 // flush at ~10Hz
@@ -30,7 +32,7 @@ const BATCH_INTERVAL_MS = 100 // flush at ~10Hz
 export function useSimulatorEvents(): SimEventsState {
   const [poleStates, setPoleStates] = useState(new Map<string, PoleState>())
   const [connected, setConnected] = useState(false)
-  const [lastEvent, setLastEvent] = useState<TelemetryEvent | null>(null)
+  const [lastEvents, setLastEvents] = useState<TelemetryEvent[]>([])
 
   const bufferRef = useRef<TelemetryEvent[]>([])
   const flushTimerRef = useRef<number | null>(null)
@@ -47,6 +49,7 @@ export function useSimulatorEvents(): SimEventsState {
       for (const evt of batch) {
         next.set(evt.pole_id, {
           energized: evt.energized,
+          reported: evt.reported,
           lastEvent: evt.event,
           lastEventTime: Date.now(),
           lastEventSeq: evt.seq,
@@ -55,8 +58,8 @@ export function useSimulatorEvents(): SimEventsState {
       return next
     })
 
-    // lastEvent drives pulse animations - use the last event in the batch
-    setLastEvent(batch[batch.length - 1])
+    // Pass entire batch to drive pulse animations for every event
+    setLastEvents(batch)
   }, [])
 
   useEffect(() => {
@@ -90,5 +93,5 @@ export function useSimulatorEvents(): SimEventsState {
     }
   }, [flush])
 
-  return { poleStates, connected, lastEvent }
+  return { poleStates, connected, lastEvents }
 }

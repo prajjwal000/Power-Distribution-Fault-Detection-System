@@ -71,12 +71,16 @@ export interface Fault {
   start_sim: number
 }
 
-export async function injectFault(target: FaultTarget): Promise<Fault> {
+export async function injectFault(target: FaultTarget): Promise<Fault | null> {
   const res = await fetch("/sim/faults", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(target),
   })
+  if (res.status === 409) {
+    // Duplicate fault — not an error, just return null
+    return null
+  }
   if (!res.ok) {
     const msg = await res.text()
     throw new SimulatorError(`Failed to inject fault: ${res.status} ${msg}`, res.status)

@@ -22,7 +22,7 @@ export function FaultInjector() {
     networkData,
   } = useFaultInjector()
 
-  const { poleStates, lastEvent, connected } = useSimulatorEvents()
+  const { poleStates, lastEvents, connected } = useSimulatorEvents()
   const { faults, loading, error, injectFault, repairFault, repairAll, refresh } = useFaults()
 
   const [injecting, setInjecting] = useState(false)
@@ -112,6 +112,29 @@ export function FaultInjector() {
     }
   }, [injectFault, ensureVisible])
 
+  const handleInjectAll = useCallback(async () => {
+    setInjecting(true)
+    let lastFault: Awaited<ReturnType<typeof injectFault>> = null
+    for (const edge of selectedEdges) {
+      const [parent_id, child_id] = edge.id.split("->")
+      const fault = await injectFault({ type: "span", parent_id, child_id })
+      if (fault) lastFault = fault
+    }
+    for (const node of selectedNodes) {
+      if (node.type === "dt") {
+        const fault = await injectFault({ type: "dt", target_id: node.id })
+        if (fault) lastFault = fault
+      } else if (node.type === "feeder") {
+        const fault = await injectFault({ type: "feeder", target_id: node.id })
+        if (fault) lastFault = fault
+      }
+    }
+    setInjecting(false)
+    if (lastFault) {
+      ensureVisible(lastFault.affected_poles)
+    }
+  }, [selectedEdges, selectedNodes, injectFault, ensureVisible])
+
   const handleRepair = useCallback(async (id: string) => {
     await repairFault(id)
   }, [repairFault])
@@ -135,7 +158,7 @@ export function FaultInjector() {
           onToggleCollapse={toggleCollapse}
           onTransformChange={updateTransform}
           poleStates={poleStates}
-          lastEvent={lastEvent}
+          lastEvents={lastEvents}
           activeFaults={faults}
         />
         <Legend />
@@ -180,7 +203,19 @@ export function FaultInjector() {
           {/* Selection-based injection */}
           {(selectedNodes.length > 0 || selectedEdges.length > 0) && (
             <div className="rounded-md border border-border bg-card p-3">
-              <div className="text-xs font-medium text-foreground mb-2">Inject Fault</div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-medium text-foreground">Inject Fault</div>
+                {(selectedEdges.length + selectedNodes.filter((n) => n.type === "dt" || n.type === "feeder").length) > 1 && (
+                  <button
+                    onClick={handleInjectAll}
+                    disabled={injecting || loading}
+                    className="rounded border border-yellow-500/50 bg-yellow-500/10 px-2 py-0.5 text-[10px] text-yellow-500 hover:bg-yellow-500/20 disabled:opacity-50 flex items-center gap-1"
+                  >
+                    <Lightning className="size-3" weight="fill" />
+                    Inject All ({selectedEdges.length + selectedNodes.filter((n) => n.type === "dt" || n.type === "feeder").length})
+                  </button>
+                )}
+              </div>
 
               {selectedEdges.map((edge) => (
                 <button

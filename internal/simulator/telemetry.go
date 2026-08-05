@@ -192,6 +192,7 @@ func (te *TelemetryEngine) scheduleHeartbeatLocked(dev *DeviceState) {
 		PoleID:    dev.PoleID,
 		Event:     "heartbeat",
 		Energized: true,
+		Reported:  true,
 		Ts:        te.clock.TsForSim(evSim, dev.ClockSkewSecs),
 		Seq:       dev.Seq,
 		BatteryMV: dev.BatteryMV,
@@ -213,6 +214,13 @@ func (te *TelemetryEngine) willEmitPowerLost(dev *DeviceState) bool {
 // injectFaultCommon does the shared work of darkening affected poles and
 // queuing power_lost events. Caller must hold mu.
 func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected []string) *Fault {
+	// Prevent duplicate faults on the same target
+	for _, f := range te.st.ActiveFaults {
+		if f.Type == faultType && f.Target == target {
+			return nil
+		}
+	}
+
 	simNow := te.clock.NowSim()
 
 	te.faultSeq++
@@ -241,16 +249,14 @@ func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected 
 		dev.Energized = false
 		dev.NextEmitSim = 0
 
-		if !te.willEmitPowerLost(dev) {
-			continue
-		}
-
+		reported := te.willEmitPowerLost(dev)
 		dev.Seq++
 		evt := TelemetryEvent{
 			DeviceID:  dev.DeviceID,
 			PoleID:    dev.PoleID,
 			Event:     "power_lost",
 			Energized: false,
+			Reported:  reported,
 			Ts:        te.clock.TsForSim(simNow, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
@@ -370,6 +376,7 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 			PoleID:    dev.PoleID,
 			Event:     "boot",
 			Energized: false,
+			Reported:  true,
 			Ts:        te.clock.TsForSim(simNow, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
@@ -386,6 +393,7 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 			PoleID:    dev.PoleID,
 			Event:     "power_restored",
 			Energized: true,
+			Reported:  true,
 			Ts:        te.clock.TsForSim(restoreSim, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
@@ -463,6 +471,7 @@ func (te *TelemetryEngine) InjectDuplicateEvent(deviceID string, count int) erro
 			PoleID:    dev.PoleID,
 			Event:     "heartbeat",
 			Energized: dev.Energized,
+			Reported:  true,
 			Ts:        te.clock.TsForSim(te.clock.NowSim(), dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
@@ -507,6 +516,7 @@ func (te *TelemetryEngine) InjectStaleReplay(deviceID string, count int) error {
 			PoleID:    dev.PoleID,
 			Event:     "power_lost",
 			Energized: false,
+			Reported:  true,
 			Ts:        te.clock.TsForSim(staleSim, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,

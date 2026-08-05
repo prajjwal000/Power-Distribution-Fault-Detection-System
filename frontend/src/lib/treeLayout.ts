@@ -188,7 +188,7 @@ function isEdgeKnown(
 // Horizontal spacing: wider for hierarchy levels (root→sub→feeder→dt),
 // tighter for pole-to-pole edges so the radial tree doesn't run off the canvas.
 const DX_HIERARCHY = 220
-const DX_POLE = 60
+const DX_POLE = 80
 // Vertical spacing between sibling nodes
 const DY = 32
 
@@ -198,8 +198,9 @@ function depthX(_type: TreeNode["type"], depth: number): number {
   if (depth < poleDepth) {
     return depth * DX_HIERARCHY
   }
+  // First pole must clear the DT container (CONTAINER_W/2 = 70px from center)
   const hierarchyEnd = (poleDepth - 1) * DX_HIERARCHY
-  return hierarchyEnd + (depth - poleDepth + 1) * DX_POLE
+  return hierarchyEnd + DX_POLE + (depth - poleDepth) * DX_POLE
 }
 
 export function computeLayout(data: NetworkData, collapsedIds: Set<string>): LayoutResult {

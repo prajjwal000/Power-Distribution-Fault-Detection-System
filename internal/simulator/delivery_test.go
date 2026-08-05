@@ -66,19 +66,34 @@ func TestInjectFaultSchedulesPowerLostWithRadioDelay(t *testing.T) {
 		t.Fatalf("affected = %v, want [P-2, P-4]", fault.AffectedSet)
 	}
 
-	if got := te.queue.Len(); got != 1 {
-		t.Fatalf("queued %d events, want 1 (D-2 emits, D-4 silent on fw 1.2)", got)
+	// Both D-2 and D-4 now emit power_lost (D-4 with reported=false since fw 1.2)
+	if got := te.queue.Len(); got != 2 {
+		t.Fatalf("queued %d events, want 2 (D-2 reports, D-4 silent but still emitted)", got)
 	}
-	if due := te.queue.Due(fault.StartSim + 9); len(due) != 0 {
-		t.Fatalf("power_lost due before radio delay elapsed: %+v", due)
+
+	// D-4 has no radio delay, so its event is due immediately.
+	if due := te.queue.Due(fault.StartSim); len(due) != 1 || due[0].PoleID != "P-4" {
+		t.Fatalf("at start only D-4 should be due (no radio delay), got %+v", due)
+	} else {
+		if due[0].Event != "power_lost" || due[0].Energized {
+			t.Errorf("unexpected D-4 event: %+v", due[0])
+		}
+		if due[0].Reported {
+			t.Errorf("D-4 should have reported=false (fw 1.2)")
+		}
 	}
+
+	// D-2 has a 10s radio delay
 	due := te.queue.Due(fault.StartSim + 10)
-	if len(due) != 1 {
-		t.Fatalf("due at radio delay = %+v, want exactly 1 event", due)
+	if len(due) != 1 || due[0].PoleID != "P-2" {
+		t.Fatalf("due at radio delay = %+v, want D-2 event", due)
 	}
 	evt := due[0]
 	if evt.Event != "power_lost" || evt.PoleID != "P-2" || evt.Energized || evt.Seq != 1 {
 		t.Errorf("unexpected event: %+v", evt)
+	}
+	if !evt.Reported {
+		t.Errorf("D-2 should have reported=true (fw 1.4.2)")
 	}
 
 	ts, err := time.Parse("2006-01-02T15:04:05.000Z", evt.Ts)

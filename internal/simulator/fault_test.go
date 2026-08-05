@@ -13,20 +13,20 @@ func TestFaultUniqueIDs(t *testing.T) {
 	te := NewTelemetryEngine(st, clock, func(TelemetryEvent) {})
 
 	f1 := te.InjectFault("P-1", "P-2")
-	f2 := te.InjectFault("P-1", "P-2")
+	f2 := te.InjectFault("P-1", "P-2") // duplicate — should return nil
 	f3 := te.InjectFault("P-2", "P-4")
 
-	if f1 == nil || f2 == nil || f3 == nil {
-		t.Fatal("all faults should inject")
+	if f1 == nil {
+		t.Fatal("first fault should inject")
 	}
-	ids := []string{f1.ID, f2.ID, f3.ID}
-	for i, id := range ids {
-		if id == "" {
-			t.Errorf("fault %d has empty ID", i)
-		}
+	if f2 != nil {
+		t.Error("duplicate fault should return nil")
 	}
-	if f1.ID == f2.ID || f1.ID == f3.ID || f2.ID == f3.ID {
-		t.Errorf("fault IDs not unique: %v", ids)
+	if f3 == nil {
+		t.Fatal("third fault should inject")
+	}
+	if f1.ID == f3.ID {
+		t.Errorf("fault IDs not unique: %s, %s", f1.ID, f3.ID)
 	}
 }
 
@@ -132,20 +132,15 @@ func TestInjectFaultOnAlreadyDarkDoesNotReemit(t *testing.T) {
 
 	// Inject fault P-1->P-2 (darkens P-2, P-4)
 	te.InjectFault("P-1", "P-2")
-	// D-2 and D-4 are dark, NextEmitSim=0
-	// Queue should have 1 event (D-2 emits)
+	// Queue has 2 events: D-2 (reported=true) and D-4 (reported=false, fw 1.2)
 
 	// Inject another fault on P-2->P-4 (inner, affects P-4 again)
 	// D-4 is already dark, so no new power_lost should be queued for it
 	te.InjectFault("P-2", "P-4")
 
-	// Total queued events should still be 1 (only D-2's first power_lost)
-	// Wait - D-2 is also dark from the first fault, so InjectFault("P-2","P-4")
-	// won't emit for D-2 (it's not in the affected set - affected is P-4)
-	// and D-4 is dark and fw 1.2 silent. So queue len should be 1.
-	// Actually, P-4 is affected, D-4 is fw 1.2 -> no emit. So queue stays at 1.
-	if got := te.queue.Len(); got != 1 {
-		t.Errorf("queue len = %d, want 1", got)
+	// Queue still has 2 events (D-2 and D-4 from first fault only)
+	if got := te.queue.Len(); got != 2 {
+		t.Errorf("queue len = %d, want 2", got)
 	}
 }
 
@@ -176,13 +171,16 @@ func TestInjectDT(t *testing.T) {
 	if fault.Affected != 1 {
 		t.Errorf("affected count = %d, want 1", fault.Affected)
 	}
-	// Queue should have 1 event (D-5 emits)
+	// Queue should have 1 event (D-5 emits with reported=true)
 	if got := te.queue.Len(); got != 1 {
 		t.Errorf("queue len = %d, want 1", got)
 	}
 	due := te.queue.Due(math.MaxInt64)
 	if len(due) != 1 || due[0].PoleID != "P-5" {
 		t.Errorf("due event = %+v, want P-5 power_lost", due)
+	}
+	if !due[0].Reported {
+		t.Errorf("D-5 should have reported=true (fw 1.4.2)")
 	}
 }
 

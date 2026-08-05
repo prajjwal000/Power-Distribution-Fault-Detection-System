@@ -24,7 +24,7 @@ interface NetworkCanvasProps {
   onToggleCollapse: (nodeId: string) => void
   onTransformChange: (t: { x: number; y: number; k: number }) => void
   poleStates?: Map<string, PoleState>
-  lastEvent?: TelemetryEvent | null
+  lastEvents?: TelemetryEvent[]
   activeFaults?: Fault[]
 }
 
@@ -52,6 +52,7 @@ const COLORS = {
   poleFill: "#d4d4d4",
   poleNoDevice: "transparent",
   poleDark: "#991b1b",
+  poleSilentFail: "#92400e",
   text: "#e5e5e5",
   textMuted: "#737373",
   indicatorFill: "#888",
@@ -123,7 +124,7 @@ function drawNode(
 
   if (node.type === "pole") {
     const state = poleStates?.get(node.id)
-    drawPole(ctx, node, isSelected, state?.energized)
+    drawPole(ctx, node, isSelected, state?.energized, state?.reported)
   } else if (node.type === "root") {
     // virtual root — tiny dot, not interactive
     ctx.beginPath()
@@ -140,6 +141,7 @@ function drawPole(
   node: PositionedNode,
   selected: boolean,
   energized?: boolean,
+  reported?: boolean,
 ) {
   const r = NODE_RADIUS
 
@@ -155,7 +157,22 @@ function drawPole(
 
   if (node.hasDevice) {
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
-    ctx.fillStyle = energized === false ? COLORS.poleDark : COLORS.poleFill
+
+    // 4 visual states:
+    // - energized=true (or undefined with no event): white fill (healthy)
+    // - energized=false, reported=true: dark red fill (device reported power_lost)
+    // - energized=false, reported=false: amber fill (silent failure — device didn't report)
+    // - energized=false, reported=undefined: dark red fill (unknown, treat as reported)
+    let fillColor: string
+    if (energized === false && reported === false) {
+      fillColor = COLORS.poleSilentFail
+    } else if (energized === false) {
+      fillColor = COLORS.poleDark
+    } else {
+      fillColor = COLORS.poleFill
+    }
+
+    ctx.fillStyle = fillColor
     ctx.fill()
     ctx.strokeStyle = COLORS.nodeStroke
     ctx.lineWidth = 1
@@ -382,7 +399,7 @@ export function NetworkCanvas({
   onToggleCollapse,
   onTransformChange,
   poleStates,
-  lastEvent,
+  lastEvents,
   activeFaults,
 }: NetworkCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -514,14 +531,16 @@ export function NetworkCanvas({
   // ── Pulse animation: add pulse on new event ──
 
   useEffect(() => {
-    if (!lastEvent) return
+    if (!lastEvents || lastEvents.length === 0) return
 
-    activePulsesRef.current.push({
-      poleId: lastEvent.pole_id,
-      event: lastEvent.event,
-      startTime: performance.now(),
-      duration: PULSE_DURATION,
-    })
+    for (const evt of lastEvents) {
+      activePulsesRef.current.push({
+        poleId: evt.pole_id,
+        event: evt.event,
+        startTime: performance.now(),
+        duration: PULSE_DURATION,
+      })
+    }
 
     // Start rAF loop if not already running
     if (rafIdRef.current === null) {
@@ -547,7 +566,7 @@ export function NetworkCanvas({
 
       rafIdRef.current = requestAnimationFrame(tick)
     }
-  }, [lastEvent, doRender, drawPulseOverlay])
+  }, [lastEvents, doRender, drawPulseOverlay])
 
   // ── Cleanup rAF on unmount ──
 
