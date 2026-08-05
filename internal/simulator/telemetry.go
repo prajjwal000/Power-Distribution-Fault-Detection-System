@@ -19,6 +19,16 @@ const HeartbeatJitterSecs = 45
 // actually lost power.
 const WarmupWindowSecs = 120
 
+const (
+	deliveryWorkers  = 8
+	dispatchInterval = 50 * time.Millisecond
+	schedulerTick    = 100 * time.Millisecond
+)
+
+// powerLostDeliveryRate is the fraction of dying-message attempts that make
+// it through (capacitor reserve). A var, not a const, so tests can pin it.
+var powerLostDeliveryRate = 0.70
+
 type deviceHeap []*DeviceState
 
 func (h deviceHeap) Len() int           { return len(h) }
@@ -37,23 +47,50 @@ type TelemetryEngine struct {
 	st    *SimulatorState
 	clock *Clock
 	emit  TelemetryEmitter
-	mu    sync.Mutex
+	queue *DeliveryQueue
+	rng   *rand.Rand // guarded by mu
+
+	jobs   chan TelemetryEvent
+	stopCh chan struct{}
+
+	schedWg  sync.WaitGroup // run + dispatch
+	workerWg sync.WaitGroup // delivery workers
+
+	mu sync.Mutex
 }
 
 func NewTelemetryEngine(st *SimulatorState, clock *Clock, emit TelemetryEmitter) *TelemetryEngine {
-	return &TelemetryEngine{st: st, clock: clock, emit: emit}
+	return &TelemetryEngine{
+		st:     st,
+		clock:  clock,
+		emit:   emit,
+		queue:  NewDeliveryQueue(),
+		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
+		jobs:   make(chan TelemetryEvent, 4096),
+		stopCh: make(chan struct{}),
+	}
 }
 
 func (te *TelemetryEngine) Start() {
 	te.mu.Lock()
 	te.initializeNextEmitTimes()
 	te.mu.Unlock()
+
+	te.schedWg.Add(2)
 	go te.run()
+	go te.dispatch()
+
+	te.workerWg.Add(deliveryWorkers)
+	for i := 0; i < deliveryWorkers; i++ {
+		go te.worker()
+	}
 }
 
 func (te *TelemetryEngine) Stop() {
-	te.mu.Lock()
-	defer te.mu.Unlock()
+	close(te.stopCh)
+	te.schedWg.Wait()
+	close(te.jobs)
+	te.workerWg.Wait()
 }
 
 func (te *TelemetryEngine) initializeNextEmitTimes() {
@@ -66,12 +103,55 @@ func (te *TelemetryEngine) initializeNextEmitTimes() {
 	}
 }
 
+// run fires due heartbeats on the scheduler tick.
 func (te *TelemetryEngine) run() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	defer te.schedWg.Done()
+	ticker := time.NewTicker(schedulerTick)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		te.tick()
+	for {
+		select {
+		case <-te.stopCh:
+			return
+		case <-ticker.C:
+			te.tick()
+		}
+	}
+}
+
+// dispatch moves due events from the delivery queue to the worker pool.
+// Delivery is keyed on sim time, so a paused clock delivers nothing.
+func (te *TelemetryEngine) dispatch() {
+	defer te.schedWg.Done()
+	ticker := time.NewTicker(dispatchInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-te.stopCh:
+			return
+		case <-ticker.C:
+			if te.clock.IsPaused() {
+				continue
+			}
+			for _, evt := range te.queue.Due(te.clock.NowSim()) {
+				select {
+				case te.jobs <- evt:
+				case <-te.stopCh:
+					return
+				}
+			}
+		}
+	}
+}
+
+// worker delivers events to the fan-out emitter (API ingest + SSE broadcast).
+// Delivery happens here, off the engine lock, so a slow API can only slow
+// delivery — never heartbeat scheduling or fault injection.
+func (te *TelemetryEngine) worker() {
+	defer te.workerWg.Done()
+	for evt := range te.jobs {
+		te.emit(evt)
 	}
 }
 
@@ -93,11 +173,7 @@ func (te *TelemetryEngine) tick() {
 		if !dev.Energized {
 			continue
 		}
-		if dev.NextEmitSim > simNow {
-			heap.Push(&h, dev)
-			break
-		}
-		te.emitEventLocked(dev, simNow)
+		te.scheduleHeartbeatLocked(dev)
 
 		jitter := int64(HeartbeatJitterSecs * 2 * rand.Float64())
 		dev.NextEmitSim = simNow + int64(HeartbeatIntervalSecs) - int64(HeartbeatJitterSecs) + jitter
@@ -105,22 +181,30 @@ func (te *TelemetryEngine) tick() {
 	}
 }
 
-func (te *TelemetryEngine) emitEventLocked(dev *DeviceState, simNow int64) {
+func (te *TelemetryEngine) scheduleHeartbeatLocked(dev *DeviceState) {
 	dev.Seq++
 	evSim := dev.NextEmitSim
-	ts := te.clock.TsForSim(evSim, dev.ClockSkewSecs)
 	evt := TelemetryEvent{
 		DeviceID:  dev.DeviceID,
 		PoleID:    dev.PoleID,
 		Event:     "heartbeat",
 		Energized: true,
-		Ts:        ts,
+		Ts:        te.clock.TsForSim(evSim, dev.ClockSkewSecs),
 		Seq:       dev.Seq,
 		BatteryMV: dev.BatteryMV,
 		RSSI:      dev.RSSI,
 		Fw:        dev.Firmware,
 	}
-	te.emit(evt)
+	te.queue.Schedule(evSim+dev.RadioDelaySecs, evt)
+}
+
+// willEmitPowerLost decides whether a device's dying power_lost attempt
+// succeeds. Callers must hold mu (guards rng).
+func (te *TelemetryEngine) willEmitPowerLost(dev *DeviceState) bool {
+	if !dev.FirmwareSendsPowerLost() {
+		return false
+	}
+	return te.rng.Float64() < powerLostDeliveryRate
 }
 
 func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
@@ -147,28 +231,29 @@ func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
 		if !ok {
 			continue
 		}
+		if !dev.Energized {
+			continue
+		}
 		dev.Energized = false
 		dev.NextEmitSim = 0
 
-		if !dev.WillEmitPowerLost() {
+		if !te.willEmitPowerLost(dev) {
 			continue
 		}
 
-		evSim := simNow + dev.RadioDelaySecs
-		dev.NextEmitSim = evSim
 		dev.Seq++
 		evt := TelemetryEvent{
 			DeviceID:  dev.DeviceID,
 			PoleID:    dev.PoleID,
 			Event:     "power_lost",
 			Energized: false,
-			Ts:        te.clock.TsForSim(evSim, dev.ClockSkewSecs),
+			Ts:        te.clock.TsForSim(simNow, dev.ClockSkewSecs),
 			Seq:       dev.Seq,
 			BatteryMV: dev.BatteryMV,
 			RSSI:      dev.RSSI,
 			Fw:        dev.Firmware,
 		}
-		te.emit(evt)
+		te.queue.Schedule(simNow+dev.RadioDelaySecs, evt)
 	}
 
 	return fault
@@ -227,7 +312,7 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string) {
 
 		dev.Seq = 0
 		dev.Seq++
-		te.emit(TelemetryEvent{
+		te.queue.Schedule(simNow+dev.RadioDelaySecs, TelemetryEvent{
 			DeviceID:  dev.DeviceID,
 			PoleID:    dev.PoleID,
 			Event:     "boot",
@@ -240,8 +325,8 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string) {
 		})
 
 		dev.Seq++
-		restoreSim := simNow + dev.RadioDelaySecs + 1
-		te.emit(TelemetryEvent{
+		restoreSim := simNow + 1
+		te.queue.Schedule(restoreSim+dev.RadioDelaySecs, TelemetryEvent{
 			DeviceID:  dev.DeviceID,
 			PoleID:    dev.PoleID,
 			Event:     "power_restored",
@@ -258,5 +343,3 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string) {
 		dev.NextEmitSim = simNow + int64(HeartbeatIntervalSecs) - int64(HeartbeatJitterSecs) + jitter
 	}
 }
-
-

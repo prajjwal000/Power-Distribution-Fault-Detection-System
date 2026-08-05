@@ -84,6 +84,12 @@ func (c *Clock) Resume() {
 	}
 }
 
+func (c *Clock) IsPaused() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.paused
+}
+
 func (c *Clock) SetSimTime(t int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

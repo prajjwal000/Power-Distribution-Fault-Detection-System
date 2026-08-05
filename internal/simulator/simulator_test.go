@@ -33,25 +33,39 @@ func TestDescendants(t *testing.T) {
 	}
 }
 
-func TestWillEmitPowerLost(t *testing.T) {
+func TestEnginePowerLostDeliveryRate(t *testing.T) {
+	st := NewSimulatorState()
+	te := NewTelemetryEngine(st, NewClock(1), func(TelemetryEvent) {})
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
 	emitted := 0
+	d := &DeviceState{Firmware: "1.3.0"}
 	for i := 0; i < 1000; i++ {
-		d := &DeviceState{Firmware: "1.3.0"}
-		if d.WillEmitPowerLost() {
+		if te.willEmitPowerLost(d) {
 			emitted++
 		}
 	}
 	rate := float64(emitted) / 1000.0
 	if rate < 0.60 || rate > 0.80 {
-		t.Errorf("emit rate = %.2f; want ~0.70", rate)
+		t.Errorf("delivery rate = %.2f; want ~0.70", rate)
 	}
 }
 
-func TestFW1_2NeverEmits(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		d := &DeviceState{Firmware: "1.2.0"}
-		if d.WillEmitPowerLost() {
-			t.Fatal("fw 1.2.x must never emit power_lost")
+func TestFirmwareSendsPowerLost(t *testing.T) {
+	cases := []struct {
+		fw   string
+		want bool
+	}{
+		{"1.2.0", false},
+		{"1.2.9", false},
+		{"1.3.0", true},
+		{"1.4.2", true},
+	}
+	for _, c := range cases {
+		d := &DeviceState{Firmware: c.fw}
+		if got := d.FirmwareSendsPowerLost(); got != c.want {
+			t.Errorf("fw %s: got %v, want %v", c.fw, got, c.want)
 		}
 	}
 }

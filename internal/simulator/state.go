@@ -1,7 +1,6 @@
 package simulator
 
 import (
-	"math/rand"
 	"power-fault-detector/internal/model"
 )
 
@@ -18,11 +17,15 @@ type DeviceState struct {
 	NextEmitSim    int64
 }
 
-func (d *DeviceState) WillEmitPowerLost() bool {
+// FirmwareSendsPowerLost reports whether this device's firmware attempts a
+// dying power_lost message at all. Firmware 1.2.x never does — it simply
+// stops heartbeating. Whether the attempt succeeds is decided by the engine
+// (see TelemetryEngine.willEmitPowerLost), not the device.
+func (d *DeviceState) FirmwareSendsPowerLost() bool {
 	if len(d.Firmware) >= 3 && d.Firmware[0] == '1' && d.Firmware[1] == '.' && d.Firmware[2] == '2' {
 		return false
 	}
-	return rand.Float64() < 0.70
+	return true
 }
 
 type TelemetryEvent struct {
