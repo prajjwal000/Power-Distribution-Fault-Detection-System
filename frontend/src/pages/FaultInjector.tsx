@@ -191,6 +191,39 @@ export function FaultInjector() {
             Collapse all
           </button>
         </div>
+
+        {/* Injection Stats overlay - bottom right */}
+        {faults.length > 0 && (() => {
+          const latestFault = [...faults].sort((a, b) => b.start_sim - a.start_sim)[0]
+          if (!latestFault) return null
+          const affectedPoles = latestFault.affected_poles || []
+          const devicesOnPoles = affectedPoles.map((poleId) => 
+            networkData?.registry_poles.find((p) => p.id === poleId)
+          ).filter(Boolean)
+          const totalDevices = devicesOnPoles.filter((p) => p?.device_id).length
+          return (
+            <div className="pointer-events-auto absolute bottom-3 right-3 w-64 rounded-md border border-border bg-card/95 p-2 backdrop-blur-sm">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <Timer className="size-3 text-green-500" weight="fill" />
+                <span className="text-[10px] font-medium text-foreground">Last Injection</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+                <div className="truncate text-muted-foreground">Target</div>
+                <div className="font-mono text-foreground truncate">{latestFault.target}</div>
+                <div className="text-muted-foreground">Poles</div>
+                <div className="font-mono text-foreground">{latestFault.affected_count}</div>
+                <div className="text-muted-foreground">Devices</div>
+                <div className="font-mono text-foreground">{totalDevices}</div>
+                <div className="text-muted-foreground">Auto-repair</div>
+                <div className="font-mono text-foreground">
+                  {latestFault.auto_repair_sim_secs && latestFault.auto_repair_sim_secs > 0
+                    ? `${Math.round(latestFault.auto_repair_sim_secs / 30)}s`
+                    : "Never"}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Right panel */}
@@ -396,61 +429,6 @@ export function FaultInjector() {
               <br />
               Select an edge to inject a span fault, or a DT/feeder to inject that type.
             </p>
-          )}
-
-          {/* Injection Stats - show for the most recent fault */}
-          {faults.length > 0 && (
-            <div className="rounded-md border border-border bg-card p-3">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <Timer className="size-3.5 text-green-500" weight="fill" />
-                  <div className="text-xs font-medium text-foreground">Last Injection Stats</div>
-                </div>
-              </div>
-              {(() => {
-                const latestFault = [...faults].sort((a, b) => b.start_sim - a.start_sim)[0]
-                if (!latestFault) return null
-                const affectedPoles = latestFault.affected_poles || []
-                const devicesOnPoles = affectedPoles.map((poleId) => 
-                  networkData?.registry_poles.find((p) => p.id === poleId)
-                ).filter(Boolean)
-                const totalDevices = devicesOnPoles.filter((p) => p?.device_id).length
-                return (
-                  <div className="grid grid-cols-2 gap-2 text-[10px]">
-                    <div className="rounded border border-border bg-card/50 p-2">
-                      <div className="text-muted-foreground">Target</div>
-                      <div className="font-mono text-foreground truncate">{latestFault.target}</div>
-                    </div>
-                    <div className="rounded border border-border bg-card/50 p-2">
-                      <div className="text-muted-foreground">Type</div>
-                      <div className="font-mono text-foreground capitalize">{latestFault.type}</div>
-                    </div>
-                    <div className="rounded border border-border bg-card/50 p-2">
-                      <div className="text-muted-foreground">Poles Affected</div>
-                      <div className="font-mono text-foreground">{latestFault.affected_count}</div>
-                    </div>
-                    <div className="rounded border border-border bg-card/50 p-2">
-                      <div className="text-muted-foreground">Devices on Poles</div>
-                      <div className="font-mono text-foreground">{totalDevices}</div>
-                    </div>
-                    <div className="rounded border border-border bg-card/50 p-2">
-                      <div className="text-muted-foreground">Auto-repair</div>
-                      <div className="font-mono text-foreground">
-                        {latestFault.auto_repair_sim_secs && latestFault.auto_repair_sim_secs > 0
-                          ? `${Math.round(latestFault.auto_repair_sim_secs / 30)}s`
-                          : "Never"}
-                      </div>
-                    </div>
-                    <div className="rounded border border-border bg-card/50 p-2">
-                      <div className="text-muted-foreground">Est. Power Lost Reported</div>
-                      <div className="font-mono text-foreground">
-                        ~{Math.round(totalDevices * 0.7)} / {totalDevices} (70%)
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
           )}
         </div>
 
