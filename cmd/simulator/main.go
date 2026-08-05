@@ -47,9 +47,6 @@ func main() {
 	te := simulator.NewTelemetryEngine(st, clock, fanout)
 	te.Start()
 
-	log.Println("[simulator] running backfill...")
-	simulator.Backfill(st, clock, fanout)
-
 	mux := http.NewServeMux()
 	svr := simulator.NewServer(st, clock, te, broadcaster)
 	svr.Register(mux)

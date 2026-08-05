@@ -12,6 +12,13 @@ type TelemetryEmitter func(event TelemetryEvent)
 const HeartbeatIntervalSecs = 900
 const HeartbeatJitterSecs = 45
 
+// WarmupWindowSecs bounds when each device sends its first heartbeat after
+// simulator boot. Spreading first check-ins across this window establishes
+// the energized baseline at the API quickly without a startup burst, and
+// without fabricating boot/power_restored events for devices that never
+// actually lost power.
+const WarmupWindowSecs = 120
+
 type deviceHeap []*DeviceState
 
 func (h deviceHeap) Len() int           { return len(h) }
@@ -55,9 +62,7 @@ func (te *TelemetryEngine) initializeNextEmitTimes() {
 		if !dev.Energized {
 			continue
 		}
-		jitter := int64(HeartbeatJitterSecs * 2 * rand.Float64())
-		next := now + int64(HeartbeatIntervalSecs) - int64(HeartbeatJitterSecs) + jitter
-		dev.NextEmitSim = next
+		dev.NextEmitSim = now + int64(rand.Float64()*WarmupWindowSecs)
 	}
 }
 
