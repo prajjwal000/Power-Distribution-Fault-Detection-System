@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from "react"
-import { injectFault, repairFault, repairAllFaults, listFaults, type Fault } from "@/api/simulator"
+import { injectFault, repairFault, repairAllFaults, listFaults, type Fault, type FaultTarget } from "@/api/simulator"
 
 export interface FaultState {
   faults: Fault[]
   loading: boolean
   error: Error | null
-  injectFault: (target: { type: "span" | "dt" | "feeder"; parent_id?: string; child_id?: string; target_id?: string }) => Promise<Fault | null>
+  injectFault: (target: FaultTarget) => Promise<Fault | null>
   repairFault: (id: string) => Promise<void>
   repairAll: () => Promise<void>
   refresh: () => Promise<void>
 }
+
+const POLL_INTERVAL_MS = 2000
 
 export function useFaults(): FaultState {
   const [faults, setFaults] = useState<Fault[]>([])
@@ -18,7 +20,6 @@ export function useFaults(): FaultState {
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    setError(null)
     try {
       const data = await listFaults()
       setFaults(data)
@@ -29,13 +30,14 @@ export function useFaults(): FaultState {
     }
   }, [])
 
-// eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    refresh()
-  }, [])
+    void refresh()
+    const id = setInterval(() => void refresh(), POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [refresh])
 
-  const doInjectFault = useCallback(async (target: { type: "span" | "dt" | "feeder"; parent_id?: string; child_id?: string; target_id?: string }) => {
+  const doInjectFault = useCallback(async (target: FaultTarget) => {
     setError(null)
     try {
       const fault = await injectFault(target)

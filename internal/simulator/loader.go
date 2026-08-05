@@ -76,16 +76,18 @@ func seedDevices(st *SimulatorState) {
 		}
 		radioDelay := int64(rssiDeficit * 2)
 		st.Devices[*p.DeviceID] = &DeviceState{
-			PoleID:         p.ID,
-			DeviceID:       *p.DeviceID,
-			Firmware:       fw,
-			BatteryMV:      batteryMV,
-			RSSI:           rssi,
-			Seq:            0,
-			Energized:      true,
-			ClockSkewSecs:  clockSkew,
-			RadioDelaySecs: radioDelay,
-			NextEmitSim:    0,
+			PoleID:            p.ID,
+			DeviceID:          *p.DeviceID,
+			Firmware:          fw,
+			BatteryMV:         batteryMV,
+			RSSI:              rssi,
+			Seq:               0,
+			Energized:         true,
+			ClockSkewSecs:     clockSkew,
+			RadioDelaySecs:    radioDelay,
+			NextEmitSim:       0,
+			KilledAtSim:       0,
+			AutoResumeSimSecs: 0,
 		}
 	}
 }

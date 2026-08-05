@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,6 +27,16 @@ const (
 	dispatchInterval = 50 * time.Millisecond
 	schedulerTick    = 100 * time.Millisecond
 )
+
+// TelemetryStats holds delivery statistics for the simulator.
+type TelemetryStats struct {
+	EventsAttempted     int64 `json:"events_attempted"`
+	EventsDelivered     int64 `json:"events_delivered"`
+	PowerLostAttempted  int64 `json:"power_lost_attempted"`
+	PowerLostDelivered  int64 `json:"power_lost_delivered"`
+	DeviceDeaths        int64 `json:"device_deaths"`
+	DeviceResumes       int64 `json:"device_resumes"`
+}
 
 // powerLostDeliveryRate is the fraction of dying-message attempts that make
 // it through (capacitor reserve). A var, not a const, so tests can pin it.
@@ -60,6 +71,14 @@ type TelemetryEngine struct {
 	workerWg   sync.WaitGroup // delivery workers
 
 	mu sync.Mutex
+
+	// Atomic counters for stats
+	eventsAttempted     int64
+	eventsDelivered     int64
+	powerLostAttempted  int64
+	powerLostDelivered  int64
+	deviceDeaths        int64
+	deviceResumes       int64
 }
 
 func NewTelemetryEngine(st *SimulatorState, clock *Clock, emit TelemetryEmitter) *TelemetryEngine {
@@ -94,6 +113,18 @@ func (te *TelemetryEngine) Stop() {
 	te.schedWg.Wait()
 	close(te.jobs)
 	te.workerWg.Wait()
+}
+
+// GetStats returns the current telemetry delivery statistics.
+func (te *TelemetryEngine) GetStats() TelemetryStats {
+	return TelemetryStats{
+		EventsAttempted:    atomic.LoadInt64(&te.eventsAttempted),
+		EventsDelivered:    atomic.LoadInt64(&te.eventsDelivered),
+		PowerLostAttempted: atomic.LoadInt64(&te.powerLostAttempted),
+		PowerLostDelivered: atomic.LoadInt64(&te.powerLostDelivered),
+		DeviceDeaths:       atomic.LoadInt64(&te.deviceDeaths),
+		DeviceResumes:      atomic.LoadInt64(&te.deviceResumes),
+	}
 }
 
 func (te *TelemetryEngine) initializeNextEmitTimes() {
@@ -154,7 +185,9 @@ func (te *TelemetryEngine) dispatch() {
 func (te *TelemetryEngine) worker() {
 	defer te.workerWg.Done()
 	for evt := range te.jobs {
+		atomic.AddInt64(&te.eventsAttempted, 1)
 		te.emit(evt)
+		atomic.AddInt64(&te.eventsDelivered, 1)
 	}
 }
 
@@ -199,6 +232,7 @@ func (te *TelemetryEngine) scheduleHeartbeatLocked(dev *DeviceState) {
 		RSSI:      dev.RSSI,
 		Fw:        dev.Firmware,
 	}
+	atomic.AddInt64(&te.eventsAttempted, 1)
 	te.queue.Schedule(evSim+dev.RadioDelaySecs, evt)
 }
 
@@ -213,7 +247,8 @@ func (te *TelemetryEngine) willEmitPowerLost(dev *DeviceState) bool {
 
 // injectFaultCommon does the shared work of darkening affected poles and
 // queuing power_lost events. Caller must hold mu.
-func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected []string) *Fault {
+// If autoRepairSimSecs > 0, schedules an automatic repair after that many sim seconds.
+func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected []string, autoRepairSimSecs int64) *Fault {
 	// Prevent duplicate faults on the same target
 	for _, f := range te.st.ActiveFaults {
 		if f.Type == faultType && f.Target == target {
@@ -225,15 +260,20 @@ func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected 
 
 	te.faultSeq++
 	fault := &Fault{
-		ID:          "fault-" + strconv.FormatInt(int64(te.faultSeq), 10),
-		Type:        faultType,
-		Target:      target,
-		AffectedSet: affected,
-		Affected:    len(affected),
-		StartSim:    simNow,
+		ID:                "fault-" + strconv.FormatInt(int64(te.faultSeq), 10),
+		Type:              faultType,
+		Target:            target,
+		AffectedSet:       affected,
+		Affected:          len(affected),
+		StartSim:          simNow,
+		AutoRepairSimSecs: autoRepairSimSecs,
+	}
+	if autoRepairSimSecs > 0 {
+		fault.RepairAtSim = simNow + autoRepairSimSecs
 	}
 	te.st.ActiveFaults[fault.ID] = fault
 
+	powerLostCount := 0
 	for _, poleID := range affected {
 		pole := te.st.PoleByID[poleID]
 		if pole == nil || pole.DeviceID == nil {
@@ -264,6 +304,24 @@ func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected 
 			Fw:        dev.Firmware,
 		}
 		te.queue.Schedule(simNow+dev.RadioDelaySecs, evt)
+		atomic.AddInt64(&te.powerLostAttempted, 1)
+		if reported {
+			atomic.AddInt64(&te.powerLostDelivered, 1)
+			powerLostCount++
+		}
+	}
+
+	// Schedule auto-repair if requested
+	if autoRepairSimSecs > 0 {
+		// Convert sim seconds to wall seconds using current multiplier
+		multiplier := te.clock.GetMultiplier()
+		wallSecs := autoRepairSimSecs / int64(multiplier)
+		if wallSecs < 1 {
+			wallSecs = 1
+		}
+		time.AfterFunc(time.Duration(wallSecs)*time.Second, func() {
+			te.RepairFault(fault.ID)
+		})
 	}
 
 	return fault
@@ -277,7 +335,21 @@ func (te *TelemetryEngine) InjectFault(parentID, childID string) *Fault {
 		return nil
 	}
 	affected := te.st.AffectedPolesForSpan(childID)
-	return te.injectFaultCommon("span", parentID+"->"+childID, affected)
+	return te.injectFaultCommon("span", parentID+"->"+childID, affected, 0)
+}
+
+// InjectFaultWithAutoRepair injects a fault with an optional auto-repair timer.
+// autoRepairWallSecs is the wall-clock seconds before auto-repair (0 = never).
+func (te *TelemetryEngine) InjectFaultWithAutoRepair(parentID, childID string, autoRepairWallSecs int) *Fault {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	if te.st.Parents[childID] != parentID {
+		return nil
+	}
+	affected := te.st.AffectedPolesForSpan(childID)
+	autoRepairSimSecs := int64(autoRepairWallSecs) * int64(te.clock.GetMultiplier())
+	return te.injectFaultCommon("span", parentID+"->"+childID, affected, autoRepairSimSecs)
 }
 
 func (te *TelemetryEngine) InjectDT(dtID string) *Fault {
@@ -289,7 +361,20 @@ func (te *TelemetryEngine) InjectDT(dtID string) *Fault {
 		return nil
 	}
 	affected := te.st.AffectedPolesForDT(dtID)
-	return te.injectFaultCommon("dt", dtID, affected)
+	return te.injectFaultCommon("dt", dtID, affected, 0)
+}
+
+// InjectDTWithAutoRepair injects a DT fault with an optional auto-repair timer.
+func (te *TelemetryEngine) InjectDTWithAutoRepair(dtID string, autoRepairWallSecs int) *Fault {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	if _, ok := te.st.TransformerByID[dtID]; !ok {
+		return nil
+	}
+	affected := te.st.AffectedPolesForDT(dtID)
+	autoRepairSimSecs := int64(autoRepairWallSecs) * int64(te.clock.GetMultiplier())
+	return te.injectFaultCommon("dt", dtID, affected, autoRepairSimSecs)
 }
 
 func (te *TelemetryEngine) InjectFeeder(feederID string) *Fault {
@@ -301,7 +386,20 @@ func (te *TelemetryEngine) InjectFeeder(feederID string) *Fault {
 		return nil
 	}
 	affected := te.st.AffectedPolesForFeeder(feederID)
-	return te.injectFaultCommon("feeder", feederID, affected)
+	return te.injectFaultCommon("feeder", feederID, affected, 0)
+}
+
+// InjectFeederWithAutoRepair injects a feeder fault with an optional auto-repair timer.
+func (te *TelemetryEngine) InjectFeederWithAutoRepair(feederID string, autoRepairWallSecs int) *Fault {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	if _, ok := te.st.FeederByID[feederID]; !ok {
+		return nil
+	}
+	affected := te.st.AffectedPolesForFeeder(feederID)
+	autoRepairSimSecs := int64(autoRepairWallSecs) * int64(te.clock.GetMultiplier())
+	return te.injectFaultCommon("feeder", feederID, affected, autoRepairSimSecs)
 }
 
 func (te *TelemetryEngine) ListFaults() []*Fault {
@@ -411,7 +509,8 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 // while power is still on). If deviceID is specified, targets that device;
 // otherwise picks random energized devices. The device stays energized but its
 // NextEmitSim is set to 0 so it won't send heartbeats.
-func (te *TelemetryEngine) InjectDeviceDeath(deviceID string, count int) error {
+// If autoResumeWallSecs > 0, schedules an automatic resume after that many wall seconds.
+func (te *TelemetryEngine) InjectDeviceDeath(deviceID string, count int, autoResumeWallSecs int) error {
 	te.mu.Lock()
 	defer te.mu.Unlock()
 
@@ -432,10 +531,48 @@ func (te *TelemetryEngine) InjectDeviceDeath(deviceID string, count int) error {
 		return fmt.Errorf("no energized devices available")
 	}
 
+	simNow := te.clock.NowSim()
+
 	for i := 0; i < count && i < len(targets); i++ {
 		dev := targets[i]
 		dev.NextEmitSim = 0 // stop heartbeating
+		dev.KilledAtSim = simNow
+		if autoResumeWallSecs > 0 {
+			dev.AutoResumeSimSecs = int64(autoResumeWallSecs) * int64(te.clock.GetMultiplier())
+			// Schedule auto-resume
+			time.AfterFunc(time.Duration(autoResumeWallSecs)*time.Second, func() {
+				te.ResumeDevice(dev.DeviceID)
+			})
+		}
+		atomic.AddInt64(&te.deviceDeaths, 1)
 	}
+	return nil
+}
+
+// ResumeDevice resumes heartbeating for a device that was killed via InjectDeviceDeath.
+func (te *TelemetryEngine) ResumeDevice(deviceID string) error {
+	te.mu.Lock()
+	defer te.mu.Unlock()
+
+	dev, ok := te.st.Devices[deviceID]
+	if !ok {
+		return fmt.Errorf("device not found: %s", deviceID)
+	}
+
+	if dev.KilledAtSim == 0 && dev.NextEmitSim > 0 {
+		return fmt.Errorf("device %s is not killed", deviceID)
+	}
+
+	simNow := te.clock.NowSim()
+	dev.KilledAtSim = 0
+	dev.AutoResumeSimSecs = 0
+	dev.Seq++
+
+	// Schedule immediate heartbeat
+	jitter := int64(HeartbeatJitterSecs * 2 * rand.Float64())
+	dev.NextEmitSim = simNow + int64(HeartbeatIntervalSecs) - int64(HeartbeatJitterSecs) + jitter
+
+	atomic.AddInt64(&te.deviceResumes, 1)
 	return nil
 }
 

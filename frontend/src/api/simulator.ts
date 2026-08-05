@@ -60,6 +60,7 @@ export interface FaultTarget {
   parent_id?: string
   child_id?: string
   target_id?: string
+  auto_repair_secs?: number
 }
 
 export interface Fault {
@@ -69,6 +70,8 @@ export interface Fault {
   affected_poles: string[]
   affected_count: number
   start_sim: number
+  auto_repair_sim_secs?: number
+  repair_at_sim?: number
 }
 
 export async function injectFault(target: FaultTarget): Promise<Fault | null> {
@@ -118,6 +121,7 @@ export interface NoiseRequest {
   kind: "device_death" | "duplicate" | "stale_replay"
   device_id?: string
   count?: number
+  auto_resume_secs?: number
 }
 
 export async function injectNoise(req: NoiseRequest): Promise<void> {
@@ -130,6 +134,47 @@ export async function injectNoise(req: NoiseRequest): Promise<void> {
     const msg = await res.text()
     throw new SimulatorError(`Failed to inject noise: ${res.status} ${msg}`, res.status)
   }
+}
+
+// ── Device kill/resume ── //
+
+export async function killDevice(deviceId: string, autoResumeSecs?: number): Promise<void> {
+  const res = await fetch(`/sim/devices/${deviceId}/kill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ auto_resume_secs: autoResumeSecs }),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new SimulatorError(`Failed to kill device: ${res.status} ${msg}`, res.status)
+  }
+}
+
+export async function resumeDevice(deviceId: string): Promise<void> {
+  const res = await fetch(`/sim/devices/${deviceId}/resume`, { method: "POST" })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new SimulatorError(`Failed to resume device: ${res.status} ${msg}`, res.status)
+  }
+}
+
+// ── Stats ── //
+
+export interface TelemetryStats {
+  events_attempted: number
+  events_delivered: number
+  power_lost_attempted: number
+  power_lost_delivered: number
+  device_deaths: number
+  device_resumes: number
+}
+
+export async function fetchSimStats(): Promise<TelemetryStats> {
+  const res = await fetch("/sim/stats")
+  if (!res.ok) {
+    throw new SimulatorError(`Failed to fetch stats: ${res.status} ${res.statusText}`, res.status)
+  }
+  return (await res.json()) as TelemetryStats
 }
 
 // ── Scheduled outages ── //

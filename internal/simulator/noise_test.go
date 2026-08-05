@@ -20,7 +20,7 @@ func TestInjectDeviceDeath(t *testing.T) {
 		t.Fatal("devices should have scheduled heartbeats")
 	}
 
-	err := te.InjectDeviceDeath("", 1)
+	err := te.InjectDeviceDeath("", 1, 0)
 	if err != nil {
 		t.Fatalf("InjectDeviceDeath returned error: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestInjectDeviceDeath(t *testing.T) {
 	}
 
 	// Targeted device death
-	if err := te.InjectDeviceDeath("D-1", 1); err != nil {
+	if err := te.InjectDeviceDeath("D-1", 1, 0); err != nil {
 		t.Fatalf("InjectDeviceDeath: %v", err)
 	}
 	if st.Devices["D-1"].NextEmitSim != 0 {

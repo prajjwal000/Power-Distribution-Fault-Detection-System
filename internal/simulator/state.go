@@ -5,16 +5,18 @@ import (
 )
 
 type DeviceState struct {
-	PoleID         string
-	DeviceID       string
-	Firmware       string
-	BatteryMV      int
-	RSSI           int
-	Seq            int64
-	Energized      bool
-	ClockSkewSecs  int64
-	RadioDelaySecs int64
-	NextEmitSim    int64
+	PoleID            string
+	DeviceID          string
+	Firmware          string
+	BatteryMV         int
+	RSSI              int
+	Seq               int64
+	Energized         bool
+	ClockSkewSecs     int64
+	RadioDelaySecs    int64
+	NextEmitSim       int64
+	KilledAtSim       int64
+	AutoResumeSimSecs int64
 }
 
 // FirmwareSendsPowerLost reports whether this device's firmware attempts a
@@ -57,12 +59,14 @@ type SimulatorState struct {
 }
 
 type Fault struct {
-	ID          string   `json:"id"`
-	Type        string   `json:"type"`         // "span", "dt", "feeder"
-	Target      string   `json:"target"`       // "P-1->P-2" or "D-123" or "F-001"
-	AffectedSet []string `json:"affected_poles"`
-	Affected    int      `json:"affected_count"`
-	StartSim    int64    `json:"start_sim"`
+	ID               string   `json:"id"`
+	Type             string   `json:"type"`         // "span", "dt", "feeder"
+	Target           string   `json:"target"`       // "P-1->P-2" or "D-123" or "F-001"
+	AffectedSet      []string `json:"affected_poles"`
+	Affected         int      `json:"affected_count"`
+	StartSim         int64    `json:"start_sim"`
+	AutoRepairSimSecs int64   `json:"auto_repair_sim_secs,omitempty"`
+	RepairAtSim      int64    `json:"repair_at_sim,omitempty"`
 }
 
 func NewSimulatorState() *SimulatorState {

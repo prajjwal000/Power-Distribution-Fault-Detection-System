@@ -2,10 +2,21 @@ import { useCallback, useState } from "react"
 import { useFaultInjector } from "@/hooks/useFaultInjector"
 import { useSimulatorEvents } from "@/hooks/useSimulatorEvents"
 import { useFaults } from "@/hooks/useFaults"
+import { useNoise } from "@/hooks/useNoise"
 import { NetworkCanvas } from "@/components/fault-injector/NetworkCanvas"
 import { Legend } from "@/components/fault-injector/Legend"
 import { ClockDisplay } from "@/components/fault-injector/ClockDisplay"
-import { Lightning, ArrowCounterClockwise, Trash } from "@phosphor-icons/react"
+import { NoisePanel } from "@/components/fault-injector/NoisePanel"
+import { Lightning, ArrowCounterClockwise, Trash, Timer } from "@phosphor-icons/react"
+
+const AUTO_REPAIR_OPTIONS = [
+  { label: "Never", value: 0 },
+  { label: "10 sec", value: 10 },
+  { label: "30 sec", value: 30 },
+  { label: "1 min", value: 60 },
+  { label: "5 min", value: 300 },
+  { label: "10 min", value: 600 },
+] as const
 
 export function FaultInjector() {
   const {
@@ -24,8 +35,10 @@ export function FaultInjector() {
 
   const { poleStates, lastEvents, connected } = useSimulatorEvents()
   const { faults, loading, error, injectFault, repairFault, repairAll, refresh } = useFaults()
+  const { killDevice } = useNoise()
 
   const [injecting, setInjecting] = useState(false)
+  const [autoRepairSecs, setAutoRepairSecs] = useState<number>(0)
 
   const handleCollapseAll = useCallback(() => {
     const ids: string[] = []
@@ -103,7 +116,7 @@ export function FaultInjector() {
     toExpand.forEach((id) => toggleCollapse(id))
   }, [networkData, collapsedIds, toggleCollapse])
 
-  const handleInject = useCallback(async (target: { type: "span" | "dt" | "feeder"; parent_id?: string; child_id?: string; target_id?: string }) => {
+  const handleInject = useCallback(async (target: { type: "span" | "dt" | "feeder"; parent_id?: string; child_id?: string; target_id?: string; auto_repair_secs?: number }) => {
     setInjecting(true)
     const fault = await injectFault(target)
     setInjecting(false)
@@ -117,15 +130,15 @@ export function FaultInjector() {
     let lastFault: Awaited<ReturnType<typeof injectFault>> = null
     for (const edge of selectedEdges) {
       const [parent_id, child_id] = edge.id.split("->")
-      const fault = await injectFault({ type: "span", parent_id, child_id })
+      const fault = await injectFault({ type: "span", parent_id, child_id, auto_repair_secs: autoRepairSecs })
       if (fault) lastFault = fault
     }
     for (const node of selectedNodes) {
       if (node.type === "dt") {
-        const fault = await injectFault({ type: "dt", target_id: node.id })
+        const fault = await injectFault({ type: "dt", target_id: node.id, auto_repair_secs: autoRepairSecs })
         if (fault) lastFault = fault
       } else if (node.type === "feeder") {
-        const fault = await injectFault({ type: "feeder", target_id: node.id })
+        const fault = await injectFault({ type: "feeder", target_id: node.id, auto_repair_secs: autoRepairSecs })
         if (fault) lastFault = fault
       }
     }
@@ -133,7 +146,7 @@ export function FaultInjector() {
     if (lastFault) {
       ensureVisible(lastFault.affected_poles)
     }
-  }, [selectedEdges, selectedNodes, injectFault, ensureVisible])
+  }, [selectedEdges, selectedNodes, injectFault, ensureVisible, autoRepairSecs])
 
   const handleRepair = useCallback(async (id: string) => {
     await repairFault(id)
@@ -217,12 +230,29 @@ export function FaultInjector() {
                 )}
               </div>
 
+              {/* Auto-repair timer */}
+              <div className="mb-2">
+                <label className="block text-[10px] text-muted-foreground mb-1">Auto-repair after</label>
+                <select
+                  value={autoRepairSecs}
+                  onChange={(e) => setAutoRepairSecs(Number(e.target.value))}
+                  disabled={injecting || loading}
+                  className="w-full rounded border border-border bg-card/90 px-2 py-1.5 text-[10px] text-foreground hover:bg-accent disabled:opacity-50"
+                >
+                  {AUTO_REPAIR_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {selectedEdges.map((edge) => (
                 <button
                   key={edge.id}
                   onClick={() => {
                     const [parent_id, child_id] = edge.id.split("->")
-                    handleInject({ type: "span", parent_id, child_id })
+                    handleInject({ type: "span", parent_id, child_id, auto_repair_secs: autoRepairSecs })
                   }}
                   disabled={injecting || loading}
                   className="w-full rounded border border-border bg-card/90 px-2 py-1.5 text-[10px] text-foreground hover:bg-accent disabled:opacity-50 flex items-center gap-2"
@@ -237,7 +267,7 @@ export function FaultInjector() {
                   return (
                     <button
                       key={node.id}
-                      onClick={() => handleInject({ type: "dt", target_id: node.id })}
+                      onClick={() => handleInject({ type: "dt", target_id: node.id, auto_repair_secs: autoRepairSecs })}
                       disabled={injecting || loading}
                       className="w-full rounded border border-border bg-card/90 px-2 py-1.5 text-[10px] text-foreground hover:bg-accent disabled:opacity-50 flex items-center gap-2"
                     >
@@ -250,7 +280,7 @@ export function FaultInjector() {
                   return (
                     <button
                       key={node.id}
-                      onClick={() => handleInject({ type: "feeder", target_id: node.id })}
+                      onClick={() => handleInject({ type: "feeder", target_id: node.id, auto_repair_secs: autoRepairSecs })}
                       disabled={injecting || loading}
                       className="w-full rounded border border-border bg-card/90 px-2 py-1.5 text-[10px] text-foreground hover:bg-accent disabled:opacity-50 flex items-center gap-2"
                     >
@@ -261,6 +291,39 @@ export function FaultInjector() {
                 }
                 return null
               })}
+            </div>
+          )}
+
+          {/* Kill Telemetry for selected nodes with devices */}
+          {selectedNodes.some((n) => n.hasDevice === true) && (
+            <div className="rounded-md border border-border bg-card p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Lightning className="size-3.5 text-red-500" weight="fill" />
+                  <div className="text-xs font-medium text-foreground">Kill Telemetry</div>
+                </div>
+                <span className="text-[10px] text-muted-foreground">
+                  {autoRepairSecs === 0 ? "No auto-resume" : `Auto-resumes in ${autoRepairSecs}s`}
+                </span>
+              </div>
+              <div className="space-y-1">
+                {selectedNodes.filter((n) => n.hasDevice === true).map((node) => {
+                  const deviceId = networkData?.registry_poles.find((p) => p.id === node.id)?.device_id
+                  return deviceId ? (
+                    <div key={node.id} className="flex items-center gap-2">
+                      <span className="flex-1 text-[10px] text-muted-foreground truncate">{node.name}</span>
+                      <button
+                        onClick={() => killDevice(deviceId, autoRepairSecs > 0 ? autoRepairSecs : undefined)}
+                        disabled={injecting || loading}
+                        className="rounded border border-red-500/50 bg-red-500/10 px-2 py-1 text-[10px] text-red-500 hover:bg-red-500/20 disabled:opacity-50 flex items-center gap-1"
+                      >
+                        <Lightning className="size-3" weight="fill" />
+                        Kill
+                      </button>
+                    </div>
+                  ) : null
+                })}
+              </div>
             </div>
           )}
 
@@ -334,9 +397,69 @@ export function FaultInjector() {
               Select an edge to inject a span fault, or a DT/feeder to inject that type.
             </p>
           )}
+
+          {/* Injection Stats - show for the most recent fault */}
+          {faults.length > 0 && (
+            <div className="rounded-md border border-border bg-card p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Timer className="size-3.5 text-green-500" weight="fill" />
+                  <div className="text-xs font-medium text-foreground">Last Injection Stats</div>
+                </div>
+              </div>
+              {(() => {
+                const latestFault = [...faults].sort((a, b) => b.start_sim - a.start_sim)[0]
+                if (!latestFault) return null
+                const affectedPoles = latestFault.affected_poles || []
+                const devicesOnPoles = affectedPoles.map((poleId) => 
+                  networkData?.registry_poles.find((p) => p.id === poleId)
+                ).filter(Boolean)
+                const totalDevices = devicesOnPoles.filter((p) => p?.device_id).length
+                return (
+                  <div className="grid grid-cols-2 gap-2 text-[10px]">
+                    <div className="rounded border border-border bg-card/50 p-2">
+                      <div className="text-muted-foreground">Target</div>
+                      <div className="font-mono text-foreground truncate">{latestFault.target}</div>
+                    </div>
+                    <div className="rounded border border-border bg-card/50 p-2">
+                      <div className="text-muted-foreground">Type</div>
+                      <div className="font-mono text-foreground capitalize">{latestFault.type}</div>
+                    </div>
+                    <div className="rounded border border-border bg-card/50 p-2">
+                      <div className="text-muted-foreground">Poles Affected</div>
+                      <div className="font-mono text-foreground">{latestFault.affected_count}</div>
+                    </div>
+                    <div className="rounded border border-border bg-card/50 p-2">
+                      <div className="text-muted-foreground">Devices on Poles</div>
+                      <div className="font-mono text-foreground">{totalDevices}</div>
+                    </div>
+                    <div className="rounded border border-border bg-card/50 p-2">
+                      <div className="text-muted-foreground">Auto-repair</div>
+                      <div className="font-mono text-foreground">
+                        {latestFault.auto_repair_sim_secs && latestFault.auto_repair_sim_secs > 0
+                          ? `${Math.round(latestFault.auto_repair_sim_secs / 30)}s`
+                          : "Never"}
+                      </div>
+                    </div>
+                    <div className="rounded border border-border bg-card/50 p-2">
+                      <div className="text-muted-foreground">Est. Power Lost Reported</div>
+                      <div className="font-mono text-foreground">
+                        ~{Math.round(totalDevices * 0.7)} / {totalDevices} (70%)
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
         </div>
 
-        <div className="mt-4 text-[10px] text-muted-foreground border-t border-border pt-3 space-y-1">
+        {/* Noise Panel - fixed at bottom */}
+        <div className="mt-auto pt-2">
+          <NoisePanel />
+        </div>
+
+        <div className="mt-2 text-[10px] text-muted-foreground border-t border-border pt-3 space-y-1">
           <div>Nodes: {nodes.length} &middot; Edges: {links.length}</div>
           <div className="flex items-center gap-1.5">
             <span className={`inline-block size-1.5 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />

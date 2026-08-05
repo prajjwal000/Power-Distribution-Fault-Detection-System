@@ -28,6 +28,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sim/faults/{id}", s.handleRepairFault)
 	mux.HandleFunc("POST /sim/faults/repair", s.handleRepairAll)
 	mux.HandleFunc("POST /sim/noise", s.handleInjectNoise)
+	mux.HandleFunc("POST /sim/devices/{id}/kill", s.handleKillDevice)
+	mux.HandleFunc("POST /sim/devices/{id}/resume", s.handleResumeDevice)
+	mux.HandleFunc("GET /sim/stats", s.handleGetStats)
 	mux.HandleFunc("GET /scheduled-outages", s.handleScheduledOutages)
 	mux.HandleFunc("GET /sim/events/stream", s.handleEventsStream)
 }
@@ -162,10 +165,11 @@ func (s *Server) handleListFaults(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Type     string `json:"type"`
-		ParentID string `json:"parent_id"`
-		ChildID  string `json:"child_id"`
-		TargetID string `json:"target_id"`
+		Type             string `json:"type"`
+		ParentID         string `json:"parent_id"`
+		ChildID          string `json:"child_id"`
+		TargetID         string `json:"target_id"`
+		AutoRepairSecs   int    `json:"auto_repair_secs,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -184,19 +188,31 @@ func (s *Server) handleInjectFault(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "span fault requires parent_id and child_id", http.StatusBadRequest)
 			return
 		}
-		fault = s.te.InjectFault(req.ParentID, req.ChildID)
+		if req.AutoRepairSecs > 0 {
+			fault = s.te.InjectFaultWithAutoRepair(req.ParentID, req.ChildID, req.AutoRepairSecs)
+		} else {
+			fault = s.te.InjectFault(req.ParentID, req.ChildID)
+		}
 	case "dt":
 		if req.TargetID == "" {
 			http.Error(w, "dt fault requires target_id", http.StatusBadRequest)
 			return
 		}
-		fault = s.te.InjectDT(req.TargetID)
+		if req.AutoRepairSecs > 0 {
+			fault = s.te.InjectDTWithAutoRepair(req.TargetID, req.AutoRepairSecs)
+		} else {
+			fault = s.te.InjectDT(req.TargetID)
+		}
 	case "feeder":
 		if req.TargetID == "" {
 			http.Error(w, "feeder fault requires target_id", http.StatusBadRequest)
 			return
 		}
-		fault = s.te.InjectFeeder(req.TargetID)
+		if req.AutoRepairSecs > 0 {
+			fault = s.te.InjectFeederWithAutoRepair(req.TargetID, req.AutoRepairSecs)
+		} else {
+			fault = s.te.InjectFeeder(req.TargetID)
+		}
 	default:
 		http.Error(w, "unknown fault type: "+req.Type, http.StatusBadRequest)
 		return
@@ -235,9 +251,10 @@ func (s *Server) handleRepairAll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleInjectNoise(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Kind     string `json:"kind"`      // device_death | duplicate | stale_replay
-		DeviceID string `json:"device_id"` // optional: specific device, or random if empty
-		Count    int    `json:"count"`     // optional: number of devices/events
+		Kind            string `json:"kind"`      // device_death | duplicate | stale_replay
+		DeviceID        string `json:"device_id"` // optional: specific device, or random if empty
+		Count           int    `json:"count"`     // optional: number of devices/events
+		AutoResumeSecs  int    `json:"auto_resume_secs,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -250,7 +267,7 @@ func (s *Server) handleInjectNoise(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch req.Kind {
 	case "device_death":
-		err = s.te.InjectDeviceDeath(req.DeviceID, req.Count)
+		err = s.te.InjectDeviceDeath(req.DeviceID, req.Count, req.AutoResumeSecs)
 	case "duplicate":
 		err = s.te.InjectDuplicateEvent(req.DeviceID, req.Count)
 	case "stale_replay":
@@ -265,6 +282,48 @@ func (s *Server) handleInjectNoise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleKillDevice(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("id")
+	if deviceID == "" {
+		http.Error(w, "device_id is required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		AutoResumeSecs int `json:"auto_resume_secs,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := s.te.InjectDeviceDeath(deviceID, 1, req.AutoResumeSecs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleResumeDevice(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("id")
+	if deviceID == "" {
+		http.Error(w, "device_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.te.ResumeDevice(deviceID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetStats(w http.ResponseWriter, r *http.Request) {
+	stats := s.te.GetStats()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(stats)
 }
 
 func (s *Server) handleScheduledOutages(w http.ResponseWriter, r *http.Request) {
