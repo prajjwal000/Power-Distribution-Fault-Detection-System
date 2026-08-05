@@ -76,7 +76,51 @@ The simulator models the pole-device fleet as independent actors, not a list of 
 
 ## Localization algorithm
 
-*Not yet implemented*
+The detection system uses a two-phase approach: **temporal buffering** followed by **topology-aware localization**.
+
+### Phase 1: Temporal buffering
+
+When a `power_lost` event arrives, the ingestor starts a 60-second wall-clock timer for that DT. During this window:
+
+- All `power_lost` events for the DT are collected (poles that went dark)
+- All `heartbeat` events for the DT are collected (poles that stayed lit)
+- If ALL dark poles restore before the timer fires, the detection is cancelled (transient fault)
+
+This buffer handles clock skew (±90s) and radio delay (0-48s) by waiting long enough for all events to arrive.
+
+### Phase 2: Localization
+
+Two paths based on topology availability:
+
+**Path A: Known topology (40% of DTs)**
+
+1. Sort dark and lit poles by `seq_on_line` (position from transformer)
+2. Walk the sequence to find contiguous dark groups
+3. Each dark group = one fault. The fault boundary is between the last lit pole upstream and the first dark pole
+4. Multiple dark groups with lit poles between them = multiple simultaneous faults
+5. Target ID format: `P-upstream→P-first_dark` (e.g., `P-004→P-005`)
+
+**Path B: Unknown topology (60% of DTs)**
+
+1. Cannot determine pole ordering, so report at DT level
+2. If all device-equipped poles are dark → full DT outage
+3. If some are dark → partial DT outage with list of affected poles
+4. Lower confidence score reflects the coarser localization
+
+**Confidence scoring:**
+
+- Base: 0.7 (known topology) or 0.5 (unknown topology)
+- +0.15-0.25 if all downstream poles dark and no unexpected poles affected
+- +0.1 proportional to fraction of devices reporting
+- Range: 0.1 to 0.99
+- After 15 minutes, active tickets get +0.15 refinement (more data = higher confidence)
+
+**Complexity:** O(n log n) per DT where n = number of poles (max ~240, typically ~70).
+
+**Known failure cases:**
+- Two faults very close in sequence (< 30s time gap between first dark events) may be merged into one
+- If a downstream pole with good radio reports before the fault pole, the initial estimate may be wrong (refined after 15 min)
+- fw 1.2 devices that go silent (no `power_lost`) take 15-30 min to detect via missed heartbeats
 
 ## Noise handling
 
@@ -92,14 +136,23 @@ Scheduled outages are published via the mock feed; the simulator honors them by 
 
 ## API surface
 
-Implemented endpoints:
+Implemented endpoints (API server on port 8080):
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/ingest` | Telemetry from devices and simulator (stub — logs only) |
+| POST | `/ingest` | Telemetry from devices and simulator — processed by ingestor with dedup and temporal buffering |
+| GET | `/tickets` | List all detection tickets |
+| GET | `/tickets/stream` | SSE stream of ticket updates (created, refined, verified) |
+| GET | `/stats` | Ingest stats and topology counts |
+| GET | `/healthz` | Health check (pings PostgreSQL) |
+
+Simulator endpoints (port 8081, proxied via Vite):
+
+| Method | Path | Purpose |
+|--------|------|---------|
 | GET | `/clock` | Current sim time and multiplier |
 | POST | `/clock` | Set multiplier, step time, or pause/resume |
-| GET | `/sim/topology/tree` | Ground-truth hierarchy (simulator) |
+| GET | `/sim/topology/tree` | Ground-truth hierarchy |
 | GET | `/sim/faults` | List active faults |
 | POST | `/sim/faults` | Inject fault (span/dt/feeder) |
 | POST | `/sim/faults/{id}` | Repair one fault |
@@ -107,17 +160,6 @@ Implemented endpoints:
 | POST | `/sim/noise` | Inject noise (device_death/duplicate/stale_replay) |
 | GET | `/scheduled-outages` | Mock planned-outage feed |
 | GET | `/sim/events/stream` | SSE stream of all telemetry events |
-
-Planned (not yet implemented):
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/tickets` | List tickets, filterable by status, age |
-| GET | `/tickets/:id` | Ticket detail with evidence |
-| PATCH | `/tickets/:id` | Advance lifecycle (acknowledge, assign crew, resolve) — resolve rejected if telemetry still dark |
-| GET | `/tickets/:id/evidence` | Last N telemetry events that contributed to detection |
-| GET | `/poles` | Registry poles with last known state |
-| GET | `/network/tree` | Registry-known hierarchy (not ground truth) |
 
 ## UI reasoning
 

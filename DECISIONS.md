@@ -1,5 +1,16 @@
 # Decisions
 
+## 2026-08-05 — Ingestor and detection engine architecture
+
+Built the core data pipeline: `internal/ingestor/` handles event processing, dedup, and temporal buffering; `internal/detect/` handles localization and ticket management.
+
+Key design decisions:
+- **Per-DT temporal buffer with 60s wall-clock delay**: Events arrive out of order due to clock skew (±90s) and radio delay (0-48s). Waiting 60s wall-clock (1800s at 30x sim speed) ensures all events for a fault are collected before localization runs.
+- **Two-path localization**: Known topology (40% of DTs) gets span-level localization using `seq_on_line` ordering. Unknown topology (60% of DTs) gets DT-level reporting with lower confidence.
+- **In-memory only, no DB persistence**: Tickets exist in the engine's map. Acceptable for the assignment since the simulator can re-inject faults.
+- **SSE for real-time ticket updates**: The API's `/tickets/stream` endpoint broadcasts ticket lifecycle events to the frontend. No polling needed.
+- **Confidence scoring**: Base 0.7 (known topology) or 0.5 (unknown), boosted by reporting completeness and topology certainty. Refined +0.15 after 15 minutes of additional data.
+
 ## 2026-08-05 — Restoration stagger realism
 
 On repair, each device's `power_restored` is delayed by a random 0–20 sim seconds (per spec "typically within 20 seconds"), both `boot` and `power_restored` go through the delivery queue with radio delay. This creates a realistic cascade of restoration events rather than a synchronized burst.
