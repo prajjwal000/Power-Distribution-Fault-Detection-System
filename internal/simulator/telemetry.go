@@ -3,6 +3,7 @@ package simulator
 import (
 	"container/heap"
 	"fmt"
+	"log"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -168,7 +169,16 @@ func (te *TelemetryEngine) dispatch() {
 			if te.clock.IsPaused() {
 				continue
 			}
-			for _, evt := range te.queue.Due(te.clock.NowSim()) {
+			due := te.queue.Due(te.clock.NowSim())
+			if len(due) > 0 {
+				log.Printf("[simulator] dispatch: delivering %d events (queue len: %d)", len(due), te.queue.Len())
+				for _, evt := range due {
+					if evt.Event == "power_restored" {
+						log.Printf("[simulator] dispatch: power_restored for %s", evt.DeviceID)
+					}
+				}
+			}
+			for _, evt := range due {
 				select {
 				case te.jobs <- evt:
 				case <-te.stopCh:
@@ -320,7 +330,9 @@ func (te *TelemetryEngine) injectFaultCommon(faultType, target string, affected 
 			wallSecs = 1
 		}
 		time.AfterFunc(time.Duration(wallSecs)*time.Second, func() {
-			te.RepairFault(fault.ID)
+			if err := te.RepairFault(fault.ID); err != nil {
+				log.Printf("[simulator] auto-repair failed for %s: %v", fault.ID, err)
+			}
 		})
 	}
 
@@ -451,6 +463,7 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 		}
 	}
 
+	restoredCount := 0
 	for _, poleID := range poleIDs {
 		if stillDark[poleID] {
 			continue // still dark due to another fault
@@ -502,7 +515,9 @@ func (te *TelemetryEngine) repairDevices(poleIDs []string, excludeFaultID string
 		dev.Energized = true
 		jitter := int64(HeartbeatJitterSecs * 2 * rand.Float64())
 		dev.NextEmitSim = simNow + int64(HeartbeatIntervalSecs) - int64(HeartbeatJitterSecs) + jitter
+		restoredCount++
 	}
+	log.Printf("[simulator] repairDevices: restored %d poles (from %d affected)", restoredCount, len(poleIDs))
 }
 
 // InjectDeviceDeath makes `count` devices stop heartbeating (simulates a dead modem
@@ -541,7 +556,9 @@ func (te *TelemetryEngine) InjectDeviceDeath(deviceID string, count int, autoRes
 			dev.AutoResumeSimSecs = int64(autoResumeWallSecs) * int64(te.clock.GetMultiplier())
 			// Schedule auto-resume
 			time.AfterFunc(time.Duration(autoResumeWallSecs)*time.Second, func() {
-				te.ResumeDevice(dev.DeviceID)
+				if err := te.ResumeDevice(dev.DeviceID); err != nil {
+					log.Printf("[simulator] auto-resume failed for %s: %v", dev.DeviceID, err)
+				}
 			})
 		}
 		atomic.AddInt64(&te.deviceDeaths, 1)

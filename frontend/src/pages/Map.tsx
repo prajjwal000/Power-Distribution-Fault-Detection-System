@@ -6,10 +6,11 @@ import { useTopology } from "@/hooks/useTopology"
 import { useTickets } from "@/hooks/useTickets"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { Lightning, House, Circle, CaretLeft, CaretRight } from "@phosphor-icons/react"
-import type { Ticket } from "@/lib/types"
+import type { Ticket, Substation, Feeder, Transformer, RegistryPole } from "@/lib/types"
+import type { LeafletMap } from "react-leaflet"
 
 // Fix leaflet default icon issue
-delete (L.Icon.Default.prototype as any)._getIconUrl
+delete (L.Icon.Default.prototype as Record<string, unknown>)._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -29,7 +30,13 @@ const FEEDER_STYLE = { color: "#3b82f6", weight: 2, opacity: 0.6, dashArray: "5,
 const KNOWN_EDGE_STYLE = { color: "#22c55e", weight: 2, opacity: 0.8 }
 const INFERRED_EDGE_STYLE = { color: "#f59e0b", weight: 1.5, opacity: 0.6, dashArray: "3, 3" }
 
-function PoleMarker({ pole, isDark, onClick }: { pole: any; isDark: boolean; onClick: () => void }) {
+interface PoleMarkerProps {
+  pole: RegistryPole
+  isDark: boolean
+  onClick: () => void
+}
+
+function PoleMarker({ pole, isDark, onClick }: PoleMarkerProps) {
   const color = isDark ? "#ef4444" : "#22c55e"
   return (
     <CircleMarker
@@ -51,7 +58,12 @@ function PoleMarker({ pole, isDark, onClick }: { pole: any; isDark: boolean; onC
   )
 }
 
-function DTMarker({ dt, onClick }: { dt: any; onClick: () => void }) {
+interface DTMarkerProps {
+  dt: Transformer
+  onClick: () => void
+}
+
+function DTMarker({ dt, onClick }: DTMarkerProps) {
   return (
     <Marker position={[dt.lat, dt.lon]} icon={L.divIcon({
       className: "custom-div-icon",
@@ -64,7 +76,12 @@ function DTMarker({ dt, onClick }: { dt: any; onClick: () => void }) {
   )
 }
 
-function SubstationMarker({ sub, onClick }: { sub: any; onClick: () => void }) {
+interface SubstationMarkerProps {
+  sub: Substation
+  onClick: () => void
+}
+
+function SubstationMarker({ sub, onClick }: SubstationMarkerProps) {
   return (
     <Marker position={[sub.lat, sub.lon]} icon={SUBSTATION_ICON} eventHandlers={{ click: onClick }}>
       <Popup>{sub.id} - Substation</Popup>
@@ -78,8 +95,8 @@ export function MapPage() {
   const { data: topology, loading: topoLoading } = useTopology()
   const { tickets } = useTickets()
   
-  const mapContainerRef = useRef<any>(null)
-  const [selectedAsset, setSelectedAsset] = useState<any>(null)
+  const mapContainerRef = useRef<LeafletMap | null>(null)
+  const [selectedAsset, setSelectedAsset] = useState<Substation | Feeder | Transformer | RegistryPole | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [showFaults, setShowFaults] = useState(true)
   const [showInferred, setShowInferred] = useState(true)
@@ -93,14 +110,20 @@ export function MapPage() {
 
   // Find fault from URL param
   useEffect(() => {
-    if (faultIdParam) {
+    if (!faultIdParam) return
+    
+    const loadFault = () => {
       const fault = tickets.find(t => t.id === faultIdParam)
-      setHighlightedFault(fault || null)
-      const m = getMap()
-      if (fault?.location && m) {
-        m.flyTo([fault.location.lat, fault.location.lon], 16)
+      if (fault) {
+        setHighlightedFault(fault)
+        const m = getMap()
+        if (fault.location && m) {
+          m.flyTo([fault.location.lat, fault.location.lon], 16)
+        }
       }
     }
+    
+    loadFault()
   }, [faultIdParam, tickets])
 
   // Build feeder lines
@@ -137,7 +160,7 @@ export function MapPage() {
     }).filter((e): e is EdgeData => e !== null) : []
 
   // Build inferred edges (placeholder - would come from API)
-  const inferredEdges: any[] = []
+  const inferredEdges: EdgeData[] = []
 
   // Get dark poles from tickets
   const darkPoles = new Set(tickets.flatMap(t => t.affected_poles))

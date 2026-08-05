@@ -160,7 +160,16 @@ func (idx *TopologyIndex) buildChildren() {
 }
 
 func (idx *TopologyIndex) HasKnownTopology(dtID string) bool {
-	return idx.HasTopology[dtID]
+	if idx.HasTopology[dtID] {
+		return true
+	}
+	// Fallback: check if any pole in this DT has a sequence number (GT topology)
+	for _, pid := range idx.DTIDToPoles[dtID] {
+		if p, ok := idx.PoleByID[pid]; ok && p.SeqOnLine != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (idx *TopologyIndex) PolesForDT(dtID string) []string {

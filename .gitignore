@@ -6,3 +6,7 @@ assignment_details/
 /api
 /simulator
 /generator
+deploy-*.sh
+cloud-init.yml
+deployment-info.txt
+azure-deployment-output.txt

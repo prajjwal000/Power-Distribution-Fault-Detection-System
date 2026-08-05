@@ -131,6 +131,17 @@ func (ing *Ingestor) GetTopology() *detect.TopologyIndex {
 	return ing.topology
 }
 
+func (ing *Ingestor) GetDeviceStates() map[string]detect.DeviceStateRef {
+	ing.mu.RLock()
+	defer ing.mu.RUnlock()
+	// Return a copy to avoid race conditions
+	result := make(map[string]detect.DeviceStateRef, len(ing.devices))
+	for k, v := range ing.devices {
+		result[k] = v
+	}
+	return result
+}
+
 func (ing *Ingestor) StartStatsLogger() {
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)

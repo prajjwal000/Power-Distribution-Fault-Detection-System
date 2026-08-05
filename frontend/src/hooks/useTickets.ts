@@ -29,9 +29,18 @@ export function useTickets(): TicketsState & {
   }, [])
 
   useEffect(() => {
-    fetchTickets()
-
     const eventSource = new EventSource("/api/tickets/stream")
+    
+    const loadTickets = async () => {
+      try {
+        await fetchTickets()
+      } catch {
+        // Ignore errors during initial load
+      }
+    }
+    
+    loadTickets()
+
     eventSource.onmessage = (event) => {
       try {
         const update = JSON.parse(event.data)
@@ -45,6 +54,7 @@ export function useTickets(): TicketsState & {
           })
         }
       } catch {
+        // Ignore parse errors
       }
     }
     eventSource.onerror = () => {

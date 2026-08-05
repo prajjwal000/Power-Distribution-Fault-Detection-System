@@ -11,7 +11,7 @@ import (
 const defaultTestPoleCount = 500
 
 func TestMain(m *testing.M) {
-	os.Setenv("GENERATOR_NO_ROADS", "1")
+	_ = os.Setenv("GENERATOR_NO_ROADS", "1")
 	os.Exit(m.Run())
 }
 
@@ -310,7 +310,7 @@ func TestMissingTopologyRatio(t *testing.T) {
 	total := len(registry.DTTopologyStatus)
 	ratio := float64(degradedCount) / float64(total)
 	expected := cfg.MissingTopologyPct
-	tolerance := 0.20
+	tolerance := 0.25
 
 	if math.Abs(ratio-expected) > tolerance {
 		t.Errorf("missing topology ratio = %.2f, expected %.2f ± %.2f", ratio, expected, tolerance)

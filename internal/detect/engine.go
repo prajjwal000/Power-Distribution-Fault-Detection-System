@@ -14,16 +14,30 @@ type Engine struct {
 	broadcaster  *Broadcaster
 	stopCh       chan struct{}
 	ticketSeq    int
+	ingestor     IngestorRef
+}
+
+type IngestorRef interface {
+	GetDeviceStates() map[string]DeviceStateRef
+}
+
+type DeviceStateRef interface {
+	GetDeviceID() string
+	IsEnergized() bool
 }
 
 func NewEngine(topo *TopologyIndex) *Engine {
 	return &Engine{
-		topo:        topo,
-		tickets:     make(map[string]*Ticket),
-		jobChan:     make(chan DetectionJob, 1024),
+		topo:       topo,
+		tickets:    make(map[string]*Ticket),
+		jobChan:    make(chan DetectionJob, 1024),
 		broadcaster: NewBroadcaster(),
-		stopCh:      make(chan struct{}),
+		stopCh:     make(chan struct{}),
 	}
+}
+
+func (e *Engine) SetIngestor(ing IngestorRef) {
+	e.ingestor = ing
 }
 
 func (e *Engine) JobChannel() chan<- DetectionJob {
@@ -37,6 +51,7 @@ func (e *Engine) SetBroadcaster(b *Broadcaster) {
 func (e *Engine) Start() {
 	go e.processLoop()
 	go e.refinementLoop()
+	go e.verificationLoop()
 	log.Println("[detect] engine started")
 }
 
@@ -147,33 +162,70 @@ func (e *Engine) refineTickets() {
 	}
 }
 
-func (e *Engine) HandleRestoration(deviceID string, poleID string, dtID string) {
+func (e *Engine) verificationLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			e.verifyTickets()
+		case <-e.stopCh:
+			return
+		}
+	}
+}
+
+func (e *Engine) verifyTickets() {
+	if e.ingestor == nil {
+		log.Printf("[detect] verifyTickets: ingestor is nil")
+		return
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	deviceStates := e.ingestor.GetDeviceStates()
+	log.Printf("[detect] verifyTickets: got %d device states", len(deviceStates))
+	if len(deviceStates) == 0 {
+		return
+	}
+
+	energizedDevices := make(map[string]bool)
+	for _, state := range deviceStates {
+		energizedDevices[state.GetDeviceID()] = state.IsEnergized()
+	}
+	log.Printf("[detect] verifyTickets: energized count = %d", countEnergized(energizedDevices))
+
 	for _, ticket := range e.tickets {
-		if ticket.DTID != dtID || ticket.Status != TicketActive {
+		if ticket.Status != TicketActive {
 			continue
 		}
 
-		restored := true
+		allRestored := true
+		missingCount := 0
+		notEnergizedCount := 0
 		for _, pid := range ticket.AffectedPoles {
-			if pid == poleID {
-				continue
-			}
 			if p, ok := e.topo.PoleByID[pid]; ok && p.DeviceID != nil {
-				if _, ok := e.topo.DeviceToPole[*p.DeviceID]; ok {
-					restored = false
+				deviceID := *p.DeviceID
+				if energized, ok := energizedDevices[deviceID]; ok && !energized {
+					allRestored = false
+					notEnergizedCount++
+					break
+				}
+				if !ok {
+					allRestored = false
+					missingCount++
 					break
 				}
 			}
 		}
+		log.Printf("[detect] verifyTickets: ticket %s - allRestored=%v missing=%d notEnergized=%d", ticket.ID, allRestored, missingCount, notEnergizedCount)
 
-		if restored {
+		if allRestored {
 			now := time.Now()
 			ticket.Status = TicketVerified
 			ticket.VerifiedAt = &now
-			log.Printf("[detect] ticket %s: auto-verified (all poles restored)", ticket.ID)
+			log.Printf("[detect] ticket %s: auto-verified (all %d poles restored)", ticket.ID, len(ticket.AffectedPoles))
 
 			e.broadcaster.Broadcast(TicketUpdate{
 				Type:   "ticket_verified",
@@ -181,6 +233,16 @@ func (e *Engine) HandleRestoration(deviceID string, poleID string, dtID string) 
 			})
 		}
 	}
+}
+
+func countEnergized(m map[string]bool) int {
+	count := 0
+	for _, v := range m {
+		if v {
+			count++
+		}
+	}
+	return count
 }
 
 func (e *Engine) GetTickets() []*Ticket {

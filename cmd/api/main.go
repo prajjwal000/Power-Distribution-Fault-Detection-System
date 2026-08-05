@@ -60,6 +60,9 @@ func main() {
 	ing := ingestor.NewIngestor(topo, engine.JobChannel(), ingestCfg)
 	ing.StartStatsLogger()
 
+	// Wire ingestor to engine for ticket verification
+	engine.SetIngestor(ing)
+
 	mux := http.NewServeMux()
 	
 	// API routes only - nginx handles proxying to simulator and static files
@@ -100,7 +103,7 @@ func fetchClockMultiplier(simulatorURL string) float64 {
 		log.Printf("[api] failed to fetch clock from simulator: %v, using default 30x", err)
 		return 30.0
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var clock struct {
 		Multiplier float64 `json:"multiplier"`
@@ -154,13 +157,6 @@ func handleIngest(ing *ingestor.Ingestor, engine *detect.Engine) http.HandlerFun
 		}
 
 		ing.ProcessEvent(ev)
-
-		if ev.Event == "boot" || ev.Event == "power_restored" {
-			pole, ok := ing.GetTopology().DeviceToPole[ev.DeviceID]
-			if ok {
-				engine.HandleRestoration(ev.DeviceID, pole.ID, pole.DTID)
-			}
-		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})

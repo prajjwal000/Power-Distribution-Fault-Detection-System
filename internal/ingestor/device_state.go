@@ -63,3 +63,13 @@ func (d *DeviceIngestState) ClearDarkSince() {
 func (d *DeviceIngestState) IsDark() bool {
 	return d.DarkSinceSim != nil
 }
+
+// GetDeviceID returns the device ID (implements DeviceStateRef)
+func (d *DeviceIngestState) GetDeviceID() string {
+	return d.DeviceID
+}
+
+// IsEnergized returns whether the device is currently energized (implements DeviceStateRef)
+func (d *DeviceIngestState) IsEnergized() bool {
+	return d.Energized
+}

@@ -114,7 +114,9 @@ func loadSpatialIndexUncached(dataDir string) (*SpatialGrid, error) {
 	}, nil
 }
 
-func (g *SpatialGrid) cellKey(lat, lon float64) [2]int {
+//nolint:unused
+// _cellKey is unused but kept for potential future use
+func (g *SpatialGrid) _cellKey(lat, lon float64) [2]int {
 	ci := int(math.Floor(lat / g.CellSizeLat))
 	cj := int(math.Floor(lon / g.CellSizeLon))
 	return [2]int{ci, cj}

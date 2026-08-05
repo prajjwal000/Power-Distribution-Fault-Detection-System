@@ -84,12 +84,28 @@ func localizeKnownTopology(job DetectionJob, topo *TopologyIndex) []FaultCandida
 		faultSeq := g.Start - 1
 		var targetID string
 		if faultSeq == 0 {
-			targetID = "transformer:" + job.DTID
-		} else {
-			var upstreamPole string
+			// First dark pole is at seq=1. Check if there's a pole at seq=0.
+			// If not (transformer is not a pole), this is a span fault between
+			// transformer and first pole.
+			hasPoleAtSeq0 := false
 			for _, p := range poles {
-				if p.Seq == faultSeq {
-					upstreamPole = p.PoleID
+				if p.Seq == 0 {
+					hasPoleAtSeq0 = true
+					break
+				}
+			}
+			if hasPoleAtSeq0 {
+				targetID = "transformer:" + job.DTID
+			} else {
+				// Span fault from transformer to first pole
+				targetID = "transformer→" + g.PoleIDs[0]
+			}
+		} else {
+			// Look up upstream pole from topology (all poles with seq numbers)
+			upstreamPole := ""
+			for _, pid := range topo.PolesForDT(job.DTID) {
+				if seq, ok := topo.SeqOnLine(pid); ok && seq == faultSeq {
+					upstreamPole = pid
 					break
 				}
 			}
