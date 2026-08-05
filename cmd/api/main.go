@@ -7,17 +7,59 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
 
+type ingestStats struct {
+	total uint64
+	byType map[string]uint64
+	mu     sync.Mutex
+}
+
+func (s *ingestStats) record(eventType string) {
+	atomic.AddUint64(&s.total, 1)
+	if eventType != "" {
+		s.mu.Lock()
+		s.byType[eventType]++
+		s.mu.Unlock()
+	}
+}
+
+func (s *ingestStats) snapshot() (uint64, map[string]uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	total := atomic.LoadUint64(&s.total)
+	byType := make(map[string]uint64, len(s.byType))
+	for k, v := range s.byType {
+		byType[k] = v
+	}
+	return total, byType
+}
+
 func main() {
 	cfg := readConfig()
+
+	stats := &ingestStats{byType: make(map[string]uint64)}
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			total, byType := stats.snapshot()
+			if total == 0 {
+				continue
+			}
+			log.Printf("[api] ingest: %d events in 10s %v", total, byType)
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:    cfg.addr(),
-		Handler: routes(cfg),
+		Handler: routes(cfg, stats),
 	}
 
 	// Graceful shutdown
@@ -63,14 +105,14 @@ func env(key, fallback string) string {
 }
 
 // routes builds the service mux. Extracted for testing.
-func routes(cfg apiConfig) *http.ServeMux {
+func routes(cfg apiConfig, stats *ingestStats) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
-	mux.HandleFunc("POST /ingest", handleIngest())
+	mux.HandleFunc("POST /ingest", handleIngest(stats))
 	return mux
 }
 
-func handleIngest() http.HandlerFunc {
+func handleIngest(stats *ingestStats) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var event map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
@@ -78,10 +120,8 @@ func handleIngest() http.HandlerFunc {
 			return
 		}
 
-		if poleID, ok := event["pole_id"].(string); ok {
-			if evt, ok := event["event"].(string); ok {
-				log.Printf("[api] ingest: pole=%s event=%s", poleID, evt)
-			}
+		if evt, ok := event["event"].(string); ok {
+			stats.record(evt)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
