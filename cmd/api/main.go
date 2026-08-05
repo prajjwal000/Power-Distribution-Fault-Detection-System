@@ -96,6 +96,8 @@ func env(key, fallback string) string {
 
 func routes(cfg apiConfig, ing *ingestor.Ingestor, engine *detect.Engine, topo *detect.TopologyIndex) *http.ServeMux {
 	mux := http.NewServeMux()
+	
+	// API routes
 	mux.HandleFunc("GET /healthz", handleHealthz(cfg))
 	mux.HandleFunc("POST /ingest", handleIngest(ing, engine))
 	mux.HandleFunc("GET /tickets", handleGetTickets(engine))
@@ -103,7 +105,39 @@ func routes(cfg apiConfig, ing *ingestor.Ingestor, engine *detect.Engine, topo *
 	mux.HandleFunc("GET /tickets/stream", handleTicketsStream(engine))
 	mux.HandleFunc("GET /network/inferred-topology", handleInferredTopology(topo))
 	mux.HandleFunc("GET /stats", handleStats(ing, topo))
+	
+	// Static file serving for frontend (SPA)
+	// Serve index.html for all non-API routes to support client-side routing
+	fs := http.FileServer(http.Dir("./static"))
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		// Skip API routes
+		if r.URL.Path != "/" && 
+		   !isStaticFile(r.URL.Path) &&
+		   !strings.HasPrefix(r.URL.Path, "/api/") &&
+		   !strings.HasPrefix(r.URL.Path, "/healthz") &&
+		   !strings.HasPrefix(r.URL.Path, "/ingest") &&
+		   !strings.HasPrefix(r.URL.Path, "/tickets") &&
+		   !strings.HasPrefix(r.URL.Path, "/network/") &&
+		   !strings.HasPrefix(r.URL.Path, "/stats") {
+			// Serve index.html for SPA routing
+			http.ServeFile(w, r, "./static/index.html")
+			return
+		}
+		// Serve static files
+		fs.ServeHTTP(w, r)
+	})
+	
 	return mux
+}
+
+func isStaticFile(path string) bool {
+	staticExtensions := []string{".js", ".css", ".ico", ".png", ".jpg", ".svg", ".woff", ".woff2", ".ttf", ".map"}
+	for _, ext := range staticExtensions {
+		if strings.HasSuffix(path, ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func handleIngest(ing *ingestor.Ingestor, engine *detect.Engine) http.HandlerFunc {

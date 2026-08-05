@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState, useCallback } from "react"
+import { useEffect, useState, useRef } from "react"
 import { MapContainer, TileLayer, Marker, Popup, Polyline, CircleMarker, LayerGroup } from "react-leaflet"
 import "leaflet/dist/leaflet.css"
 import L from "leaflet"
 import { useTopology } from "@/hooks/useTopology"
 import { useTickets } from "@/hooks/useTickets"
 import { useSearchParams, useNavigate } from "react-router-dom"
-import { Search, Layers, MapPin, Zap, Home, Circle, ChevronLeft, ChevronRight } from "@phosphor-icons/react"
-import type { NetworkData, Ticket } from "@/lib/types"
+import { Lightning, House, Circle, CaretLeft, CaretRight } from "@phosphor-icons/react"
+import type { Ticket } from "@/lib/types"
 
 // Fix leaflet default icon issue
 delete (L.Icon.Default.prototype as any)._getIconUrl
@@ -28,7 +28,6 @@ const SUBSTATION_ICON = L.divIcon({
 const FEEDER_STYLE = { color: "#3b82f6", weight: 2, opacity: 0.6, dashArray: "5, 5" }
 const KNOWN_EDGE_STYLE = { color: "#22c55e", weight: 2, opacity: 0.8 }
 const INFERRED_EDGE_STYLE = { color: "#f59e0b", weight: 1.5, opacity: 0.6, dashArray: "3, 3" }
-const FAULT_EDGE_STYLE = { color: "#ef4444", weight: 3, opacity: 1 }
 
 function PoleMarker({ pole, isDark, onClick }: { pole: any; isDark: boolean; onClick: () => void }) {
   const color = isDark ? "#ef4444" : "#22c55e"
@@ -41,8 +40,11 @@ function PoleMarker({ pole, isDark, onClick }: { pole: any; isDark: boolean; onC
         weight: 1.5,
         fillColor: color,
         fillOpacity: 0.9,
+        interactive: true,
       }}
-      onClick={onClick}
+      eventHandlers={{
+        click: onClick,
+      }}
     >
       <Popup>{pole.id} - {isDark ? "DARK" : "ENERGIZED"}</Popup>
     </CircleMarker>
@@ -56,7 +58,7 @@ function DTMarker({ dt, onClick }: { dt: any; onClick: () => void }) {
       html: `<div style="width: 20px; height: 20px; background: #f59e0b; border: 2px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;"><span style="color: white; font-size: 10px; font-weight: bold;">⚡</span></div>`,
       iconSize: [20, 20],
       iconAnchor: [10, 10],
-    })} onClick={onClick}>
+    })} eventHandlers={{ click: onClick }}>
       <Popup>{dt.id} - {dt.capacity_kva} kVA</Popup>
     </Marker>
   )
@@ -64,7 +66,7 @@ function DTMarker({ dt, onClick }: { dt: any; onClick: () => void }) {
 
 function SubstationMarker({ sub, onClick }: { sub: any; onClick: () => void }) {
   return (
-    <Marker position={[sub.lat, sub.lon]} icon={SUBSTATION_ICON} onClick={onClick}>
+    <Marker position={[sub.lat, sub.lon]} icon={SUBSTATION_ICON} eventHandlers={{ click: onClick }}>
       <Popup>{sub.id} - Substation</Popup>
     </Marker>
   )
@@ -76,7 +78,7 @@ export function MapPage() {
   const { data: topology, loading: topoLoading } = useTopology()
   const { tickets } = useTickets()
   
-  const [map, setMap] = useState<L.Map | null>(null)
+  const mapContainerRef = useRef<any>(null)
   const [selectedAsset, setSelectedAsset] = useState<any>(null)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [showFaults, setShowFaults] = useState(true)
@@ -87,16 +89,19 @@ export function MapPage() {
   const faultIdParam = searchParams.get("fault")
   const [highlightedFault, setHighlightedFault] = useState<Ticket | null>(null)
 
+  const getMap = () => mapContainerRef.current?.leafletElement
+
   // Find fault from URL param
   useEffect(() => {
     if (faultIdParam) {
       const fault = tickets.find(t => t.id === faultIdParam)
       setHighlightedFault(fault || null)
-      if (fault?.location && map) {
-        map.flyTo([fault.location.lat, fault.location.lon], 16)
+      const m = getMap()
+      if (fault?.location && m) {
+        m.flyTo([fault.location.lat, fault.location.lon], 16)
       }
     }
-  }, [faultIdParam, tickets, map])
+  }, [faultIdParam, tickets])
 
   // Build feeder lines
   const feederLines = topology ? topology.feeders.flatMap(feeder => {
@@ -110,28 +115,29 @@ export function MapPage() {
     }))
   }) : []
 
+  interface EdgeData {
+  positions: [number, number][]
+  childId: string
+  parentId: string
+  dtId: string
+}
+
   // Build known edges (from registry topology)
-  const knownEdges = topology ? topology.registry_poles
+  const knownEdges: EdgeData[] = topology ? topology.registry_poles
     .filter(p => p.parent_pole_id)
     .map(p => {
       const parent = topology.registry_poles.find(pp => pp.id === p.parent_pole_id)
-      return parent ? {
+      if (!parent) return null
+      return {
         positions: [[parent.lat, parent.lon], [p.lat, p.lon]] as [number, number][],
         childId: p.id,
         parentId: parent.id,
         dtId: p.dt_id,
-      } : null
-    }).filter(Boolean) : []
+      }
+    }).filter((e): e is EdgeData => e !== null) : []
 
   // Build inferred edges (placeholder - would come from API)
   const inferredEdges: any[] = []
-
-  // Build poles by DT
-  const polesByDT = topology ? topology.registry_poles.reduce((acc, p) => {
-    if (!acc[p.dt_id]) acc[p.dt_id] = []
-    acc[p.dt_id].push(p)
-    return acc
-  }, {} as Record<string, any[]>) : {}
 
   // Get dark poles from tickets
   const darkPoles = new Set(tickets.flatMap(t => t.affected_poles))
@@ -149,9 +155,9 @@ export function MapPage() {
       {/* Map */}
       <div className="flex-1 relative">
         <MapContainer
+          ref={mapContainerRef}
           center={BANGALORE_CENTER}
           zoom={13}
-          whenCreated={setMap}
           className="w-full h-full"
           scrollWheelZoom={true}
         >
@@ -268,14 +274,14 @@ export function MapPage() {
               className="p-2 hover:bg-accent rounded transition-colors"
               title={sidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
             >
-              {sidebarOpen ? <ChevronLeft className="size-5" /> : <ChevronRight className="size-5" />}
+              {sidebarOpen ? <CaretLeft className="size-5" /> : <CaretRight className="size-5" />}
             </button>
             <button
-              onClick={() => map?.flyTo(BANGALORE_CENTER, 13)}
+              onClick={() => getMap()?.flyTo(BANGALORE_CENTER, 13)}
               className="p-2 hover:bg-accent rounded transition-colors"
               title="Reset View"
             >
-              <Home className="size-5" />
+              <House className="size-5" />
             </button>
           </div>
           <div className="bg-white/90 backdrop-blur rounded-lg shadow-lg p-2 border border-border">
@@ -344,7 +350,7 @@ export function MapPage() {
           <div className="p-3 border-b border-border flex items-center justify-between">
             <h3 className="font-semibold">Network Assets</h3>
             <button onClick={() => setSidebarOpen(false)} className="p-1 hover:bg-accent rounded">
-              <ChevronLeft className="size-5" />
+              <CaretLeft className="size-5" />
             </button>
           </div>
           
@@ -363,7 +369,7 @@ export function MapPage() {
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {topology?.substations.map(sub => (
               <div key={sub.id} className="p-2 hover:bg-accent rounded cursor-pointer transition-colors"
-                onClick={() => { setSelectedAsset(sub); map?.flyTo([sub.lat, sub.lon], 15); }}>
+                onClick={() => { setSelectedAsset(sub); getMap()?.flyTo([sub.lat, sub.lon], 15); }}>
                 <div className="flex items-center gap-2">
                   <div className="w-6 h-6 bg-blue-500 rounded-[2px] transform rotate-45 flex-shrink-0" />
                   <div>
@@ -378,7 +384,7 @@ export function MapPage() {
               <div key={feeder.id} className="p-2 hover:bg-accent rounded cursor-pointer transition-colors"
                 onClick={() => { setSelectedAsset(feeder); }}>
                 <div className="flex items-center gap-2">
-                  <Zap className="size-4 text-blue-500" />
+                  <Lightning className="size-4 text-blue-500" />
                   <div>
                     <p className="font-mono text-sm">{feeder.id}</p>
                     <p className="text-xs text-muted-foreground">Feeder</p>
@@ -389,7 +395,7 @@ export function MapPage() {
 
             {topology?.transformers.map(dt => (
               <div key={dt.id} className="p-2 hover:bg-accent rounded cursor-pointer transition-colors"
-                onClick={() => { setSelectedAsset(dt); map?.flyTo([dt.lat, dt.lon], 16); }}>
+                onClick={() => { setSelectedAsset(dt); getMap()?.flyTo([dt.lat, dt.lon], 16); }}>
                 <div className="flex items-center gap-2">
                   <Circle className="size-4 text-amber-500" />
                   <div>
@@ -409,7 +415,7 @@ export function MapPage() {
                 {tickets.map(ticket => (
                   <div key={ticket.id} className="p-2 bg-red-50 border border-red-200 rounded cursor-pointer hover:bg-red-100 transition-colors"
                     onClick={() => { 
-                      if (ticket.location) map?.flyTo([ticket.location.lat, ticket.location.lon], 16);
+                      if (ticket.location) getMap()?.flyTo([ticket.location.lat, ticket.location.lon], 16);
                       navigate(`/map?fault=${ticket.id}`);
                     }}>
                     <p className="font-mono text-xs">{ticket.id}</p>

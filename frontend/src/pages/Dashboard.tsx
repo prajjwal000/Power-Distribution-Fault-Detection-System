@@ -1,9 +1,9 @@
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { useState } from "react"
 import { useTickets } from "@/hooks/useTickets"
-import { MapPin, AlertTriangle, CheckCircle, ExternalLink, Loader2, MoreHorizontal } from "@phosphor-icons/react"
+import { MapPin, Warning, Check, Spinner, DotsThree, ArrowRight } from "@phosphor-icons/react"
 import { format } from "date-fns"
-import { Ticket } from "@/lib/types"
+import type { Ticket } from "@/lib/types"
 
 function SeverityBadge({ severity }: { severity: Ticket["severity"] }) {
   const styles = {
@@ -21,9 +21,9 @@ function StatusBadge({ status }: { status: Ticket["status"] }) {
     resolved: "bg-gray-100 text-gray-700",
   }
   const icons = {
-    active: AlertTriangle,
-    verified: CheckCircle,
-    resolved: CheckCircle,
+    active: Warning,
+    verified: Check,
+    resolved: Check,
   }
   const Icon = icons[status]
   return (
@@ -69,7 +69,7 @@ function TicketDetail({
             <p className="text-sm text-muted-foreground">{ticket.dt_id} • {ticket.feeder_id}</p>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-accent rounded">
-            <MoreHorizontal className="size-5" weight="bold" />
+            <DotsThree className="size-5" weight="bold" />
           </button>
         </div>
 
@@ -139,7 +139,7 @@ function TicketDetail({
               onClick={() => { navigate(`/map?fault=${ticket.id}`); onClose(); }}
               className="px-4 py-2 border border-border rounded hover:bg-accent transition-colors"
             >
-              <ExternalLink className="size-4 inline mr-1" />
+              <ArrowRight className="size-4 inline mr-1" />
               View on Map
             </button>
             {ticket.status === "active" && (
@@ -169,7 +169,6 @@ function TicketDetail({
 
 export function Dashboard() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
   const { tickets, loading, error, acknowledge, resolve } = useTickets()
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -186,7 +185,7 @@ export function Dashboard() {
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Loader2 className="size-8 animate-spin text-primary" weight="bold" />
+        <Spinner className="size-8 animate-spin text-primary" weight="bold" />
       </div>
     )
   }
